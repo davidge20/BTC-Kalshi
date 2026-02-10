@@ -1,0 +1,2 @@
+{"ts_utc": "2026-02-10T21:21:25.638617+00:00", "event": "bot_start", "state_file": "logs/state.json", "trade_log_file": "logs/dryrun_trades.jsonl", "fee_cents": 1, "count": 1, "max_contracts": 1000000, "min_edge_pp": 0.05, "capture_frac": 0.7, "stop_frac": 0.5, "min_stop_pp": 0.06, "exit_minutes_left": 3.0, "enable_edge_flip_exit": true, "edge_flip_pp": 0.02, "dry_run": true}
+{"ts_utc": "2026-02-10T21:21:27.234942+00:00", "event": "reconcile_cleared", "event_ticker": "KXBTCD-26FEB1017"}
