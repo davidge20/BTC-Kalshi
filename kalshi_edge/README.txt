@@ -175,4 +175,14 @@ kalshi_edge/
   market_discovery.py   -> auto-discover current KXBTCD event (closing soon)
   kalshi_api.py         -> fetch event, extract ABOVE markets, fetch orderbooks
   market_state.py       -> spot + implied vol + realized vol -> blended vol
-  ladder_eval.py        -> compute P / liquidity / EV for ladder m
+  ladder_eval.py        -> compute P / liquidity / EV for ladder markets
+  render.py             -> prints the summary + ladder table
+  http_client.py        -> tiny HTTP wrapper with debug toggle
+  math_models.py        -> probability + helpers
+  constants.py          -> base URLs and shared constants
+
+Notes / limitations
+-------------------
+- This tool currently evaluates only (no order placement).
+- Probability model is intentionally simple; short-dated crypto is noisy.
+- Fees are modeled as a flat number of cents; adjust as needed.

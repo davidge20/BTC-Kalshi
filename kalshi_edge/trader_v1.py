@@ -26,7 +26,13 @@ from typing import Any, Dict, Optional
 
 from kalshi_edge.http_client import HttpClient
 from kalshi_edge.kalshi_auth import KalshiAuth
-from kalshi_edge.kalshi_api import create_order, get_positions, get_orderbook
+from kalshi_edge.kalshi_api import (
+    create_order,
+    get_positions,
+    get_orderbook,
+    get_event,
+    above_markets_from_event,
+)
 from kalshi_edge.ladder_eval import parse_orderbook_stats
 from kalshi_edge.math_models import clamp01, lognormal_prob_above
 from kalshi_edge.pipeline import EvaluationResult
@@ -265,6 +271,46 @@ class V1Trader:
             "side": side,
             "position_count": int(total_abs),
         })
+
+    def _event_minutes_left(self, event_ticker: str) -> Optional[float]:
+        try:
+            event_json = get_event(self.http, event_ticker)
+            _, _, minutes_left = above_markets_from_event(event_json)
+            return float(minutes_left)
+        except Exception as e:
+            print(f"[TRADE] expiry check failed for {event_ticker}: {e}")
+            self.log.log("expiry_check_failed", {"event_ticker": event_ticker, "error": str(e)})
+            return None
+
+    def _close_state_expired(self, st: Dict[str, Any], *, reason: str, minutes_left: Optional[float]) -> None:
+        entry_cost = st.get("entry_cost")
+        snap: Dict[str, Any] = {
+            "reason": reason,
+            "event_ticker": st.get("event_ticker"),
+            "market_ticker": st.get("market_ticker"),
+            "side": st.get("side"),
+            "position_count": _open_count_from_state(st),
+            "entry_cost": float(entry_cost) if isinstance(entry_cost, (int, float)) else None,
+            "buy_cents": st.get("buy_cents"),
+            "strike": st.get("strike"),
+            "entry_ts_utc": st.get("entry_ts_utc"),
+            "minutes_left": float(minutes_left) if minutes_left is not None else None,
+            "notes": ["expired_no_settlement_info"],
+            "dry_run": self.dry_run,
+        }
+        self.log.log("position_expired", snap)
+
+        _write_state(
+            self.state_file,
+            {
+                "open": False,
+                "event_ticker": st.get("event_ticker"),
+                "filled_contracts": 0,
+                "closed_reason": reason,
+                "closed_ts_utc": _utc_ts(),
+            },
+        )
+        print(f"[TRADE] position expired; state cleared -> {self.state_file}")
 
     # -------- entry selection --------
 
@@ -687,6 +733,15 @@ class V1Trader:
         st = _read_state(self.state_file)
 
         if st.get("open"):
+            st_event = st.get("event_ticker")
+            if isinstance(st_event, str) and st_event != result.event_ticker:
+                st_minutes_left = self._event_minutes_left(st_event)
+                if st_minutes_left is not None and st_minutes_left <= 0:
+                    self._close_state_expired(st, reason="event_expired", minutes_left=st_minutes_left)
+                    return
+            if result.minutes_left <= 0:
+                self._close_state_expired(st, reason="event_expired", minutes_left=result.minutes_left)
+                return
             self._try_exit(result, st)
             return
 
