@@ -71,27 +71,27 @@ This document explains the command-line flags supported by the `kalshi_edge` CLI
 
 ## Event selection
 
-### `--event <TICKER>` (default: `None`)
+`--event <TICKER>` (default: `None`)
 Manually set the Kalshi **event ticker** (e.g., `KXBTCD-26FEB0518`). If not provided (and `--url` isn’t provided), the program auto-discovers a “closing soon” event.
 
-### `--url <URL>` (default: `None`)
+`--url <URL>` (default: `None`)
 Alternative manual selector: provide a Kalshi **market/event URL**. (Useful if you copied a link instead of a ticker.)
 
 ---
 
 ## Execution mode
 
-### `--watch` (default: off)
+`--watch` (default: off)
 Continuously re-runs evaluation and re-renders output.
 
-### `--refresh-seconds <N>` (default: `10`)
+`--refresh-seconds <N>` (default: `10`)
 Only used with `--watch`. Sleep time between refresh cycles.
 
 ---
 
 ## Auto-discovery
 
-### `--window-minutes <N>` (default: `70`)
+`--window-minutes <N>` (default: `70`)
 When auto-discovering, search for an event “closing soon” within the next N minutes.  
 If discovery fails, increase this.
 
@@ -99,17 +99,17 @@ If discovery fails, increase this.
 
 ## Ladder sizing / filtering
 
-### `--max-strikes <N>` (default: `120`)
+`--max-strikes <N>` (default: `120`)
 How many strikes from the ladder to evaluate (after filtering / sorting). Larger = more API calls.
 
-### `--band-pct <PCT>` (default: `25.0`)
+`--band-pct <PCT>` (default: `25.0`)
 Prefer ladder strikes within ±PCT% of spot. Helps focus around the “action” instead of far OTM strikes.
 
 ---
 
 ## Sorting output
 
-### `--sort {sens,strike,ev}` (default: `ev`)
+`--sort {sens,strike,ev}` (default: `ev`)
 - `ev`: highest model EV first  
 - `strike`: sort by strike level  
 - `sens`: sort by sensitivity (closest to 50/50 outcomes first)
@@ -118,27 +118,27 @@ Prefer ladder strikes within ±PCT% of spot. Helps focus around the “action”
 
 ## EV / liquidity assumptions
 
-### `--fee-cents <C>` (default: `1`)
+`--fee-cents <C>` (default: `1`)
 Flat assumed fee per contract (in cents) used when computing EV. This is a simplification.
 
-### `--depth-window-cents <C>` (default: `2`)
+`--depth-window-cents <C>` (default: `2`)
 When computing a simple “depth near top-of-book,” look within C cents of best bid.
 
-### `--threads <N>` (default: `10`)
+`--threads <N>` (default: `10`)
 Concurrency for orderbook fetches. Higher may be faster but can stress rate limits.
 
 ---
 
 ## Volatility estimation
 
-### `--iv-band-pct <PCT>` (default: `3.0`)
+`--iv-band-pct <PCT>` (default: `3.0`)
 For near-ATM IV estimation: consider options within ±PCT% of spot.
 
 ---
 
 ## Debugging
 
-### `--debug-http` (default: off)
+`--debug-http` (default: off)
 Print HTTP request/response summaries (useful for diagnosing API issues).
 
 ---
@@ -147,61 +147,61 @@ Print HTTP request/response summaries (useful for diagnosing API issues).
 
 Trading is optional. If you do not pass `--trade`, none of the auth/state/trader code is used.
 
-### `--trade` (default: off)
+`--trade` (default: off)
 Turn on the trading loop (calls into `trader_v1`).
 
-### `--dry-run` (default: off)
+`--dry-run` (default: off)
 When `--trade` is enabled, do everything except submit real orders. Still logs what it would do.
 
-### `--trade-count <N>` (default: `1`)
+`--trade-count <N>` (default: `1`)
 Contracts per entry.
 
-### `--max-contracts <N>` (default: `None`)
+`--max-contracts <N>` (default: `None`)
 Cap total position size (in contracts).  
 If omitted, defaults to `--trade-count` (i.e., one entry-sized unit max).
 
-### `--min-minutes-left <M>` (default: `2.0`)
+`--min-minutes-left <M>` (default: `2.0`)
 Don’t enter new trades if less than M minutes remain until event close (helps avoid late illiquidity).
 
-### `--state-file <PATH>` (default: `.kalshi_edge_state.json` or env override)
+`--state-file <PATH>` (default: `.kalshi_edge_state.json` or env override)
 Where trader state is stored (positions, etc).  
 Can be overridden by env var: `KALSHI_EDGE_STATE_FILE`.
 
-### `--trade-log-file <PATH>` (default: `trade_log.jsonl` or env override)
+`--trade-log-file <PATH>` (default: `trade_log.jsonl` or env override)
 Append-only JSONL log of trade actions plus a shutdown snapshot (e.g., on Ctrl-C).  
 Can be overridden by env var: `KALSHI_EDGE_TRADE_LOG_FILE`.
 
-### `--reconcile-state` (default: off)
+`--reconcile-state` (default: off)
 On first tick, sync local state with live Kalshi positions for the current event.
 
 ---
 
 ## Trading auth / connectivity flags (required for `--trade`)
 
-### `--api-key-id <ID>` (default: env `KALSHI_API_KEY_ID`)
+`--api-key-id <ID>` (default: env `KALSHI_API_KEY_ID`)
 Your Kalshi API key id.
 
-### `--private-key-path <PATH>` (default: env `KALSHI_PRIVATE_KEY_PATH`)
+`--private-key-path <PATH>` (default: env `KALSHI_PRIVATE_KEY_PATH`)
 Path to your private key file used for signing requests.
 
-### `--kalshi-base-url <URL>` (default: env `KALSHI_BASE_URL` or compiled default)
+`--kalshi-base-url <URL>` (default: env `KALSHI_BASE_URL` or compiled default)
 Base URL for Kalshi API.
 
 If `--trade` is set and `--api-key-id` / `--private-key-path` are missing, the program exits.
 
 ## Interpreting the output
 
-### `P`
+`P`
 Model probability that **BTC ≥ strike** at event close.
 
-### `Sens`
+`Sens`
 Sensitivity score: `p * (1 - p)` (peaks at **0.25** when `p = 0.5`).  
 Higher = more sensitive to small changes.
 
-### `Ybid / Nbid`
+`Ybid / Nbid`
 Best bid (in cents) on **YES** and **NO**.
 
-### `Ybuy / Nbuy` (buy-now proxy)
+`Ybuy / Nbuy` (buy-now proxy)
 Approximates the immediate buy price from the reciprocal side:
 
 - `Ybuy ≈ 100 - best NO bid`
@@ -209,10 +209,10 @@ Approximates the immediate buy price from the reciprocal side:
 
 If the reciprocal side is missing, the proxy may be unavailable.
 
-### `SprY / SprN`
+`SprY / SprN`
 Implied spread = **buy-now proxy − best bid** (tighter is better).
 
-### `EV_Y / EV_N`
+`EV_Y / EV_N`
 Expected value (in **$**) of buying **1 contract** under the model after fee.  
 Positive EV means “cheap vs model” (not a guarantee; liquidity/fees/slippage matter).
 
