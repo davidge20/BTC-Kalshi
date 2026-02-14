@@ -8,7 +8,7 @@ probabilities implied by deeper BTC markets.
 - [Methodology](methodology.md)
 - [Kalshi market microstructure](microstructure.md)
 - [Probability model](model.md)
-- [Metrics: edge and EV](metrics.md)
+- [Metrics](metrics.md)
 - [Execution assumptions](execution.md)
 - [Trading loop (optional)](trading.md)
 - [Limitations](limitations.md)

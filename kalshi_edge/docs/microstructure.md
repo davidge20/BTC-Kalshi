@@ -1,51 +1,61 @@
-# Kalshi market microstructure
+# Kalshi market microstructure (implementation-traced)
 
-## Goal
-Explain the practical order-book and contract-semantic details that matter when converting Kalshi quotes
-into “probability-like” prices and deciding whether an apparent edge is executable.
+This doc only describes formulas and conventions that are directly traceable to code in this repo.
 
-## Contract semantics (YES / NO)
-For an “ABOVE \(K\)” market:
-- YES settles to \(\$1\) if BTC settles **above \(K\)** at expiry, else \(\$0\).
-- NO settles to \(\$1\) if BTC settles **at or below \(K\)** at expiry, else \(\$0\).
+## Units and conventions
 
-In a frictionless setting, YES and NO are complements:
-\[
-p_{\text{YES}} + p_{\text{NO}} = 1
-\]
-In practice, spreads + discrete ticks + fees mean the book is not perfectly complementary.
+- **Contract payoff**: each contract settles to $\$1$ if it wins and $\$0$ otherwise.
+- **Price units**: Kalshi orderbook prices are integer **cents** in $[0,100]$.
 
-## Thin books: missing or stale asks
-Kalshi ladders can be asymmetric:
-- asks may be missing entirely
-- asks may exist only at tiny size or stale levels
-- one side can have “real” demand (bids) while the other looks empty
+## Contract semantics (as modeled here)
 
-Relying on best-ask alone can therefore yield `None` prices or unrealistic EV calculations.
+The system models an “ABOVE strike $K$” ladder and computes a model probability:
 
-## Executable “buy-now proxy” via opposite-side bids
-To stay execution-aware even when asks are missing/thin, we infer a conservative “buy-now” price
-using the opposite side’s best bid and the YES/NO complement relationship:
+$$
+p_{\text{model}} = \mathbb{P}(S_T \ge K)
+$$
 
-- In cents, for an immediate **YES** buy:
-\[
-c_{\text{YES}} \approx 100 - \text{bestBid}(\text{NO})
-\]
-- In cents, for an immediate **NO** buy:
-\[
-c_{\text{NO}} \approx 100 - \text{bestBid}(\text{YES})
-\]
+as implemented in `kalshi_edge/math_models.py::lognormal_prob_above`.
 
-This uses the most reliable live signal (active bids) to estimate a realistic entry cost.
+For side-specific win probability (used throughout the codebase):
 
-**Important:** complements need not sum to 100 in practice. Treat this as an execution-aware approximation:
-“could I likely get filled near here now?” rather than a frictionless theoretical price.
+- **YES**: $p_{\text{win,YES}} = p_{\text{model}}$
+- **NO**: $p_{\text{win,NO}} = 1 - p_{\text{model}}$
 
-## Where this is implemented
-- Look for “buy-now proxy”, “reciprocal bids”, or “implied ask” logic in `ladder_eval.py` and/or `pipeline.py`.
-- Fee and rounding conventions often live in `constants.py`.
+Used in:
+- `kalshi_edge/ladder_eval.py::evaluate_ladder`
+- `kalshi_edge/trader_v1.py::_compute_p_win_now`
 
-## Limitations / gotchas
-- When the book is extremely thin, even best-bid can be noisy (1-lot levels).
-- Depth matters: top-of-book may not represent the price for \(N\) contracts.
-- Fees can break complement intuition even further (see [metrics](metrics.md)).
+**TODO**: This is the repo’s modeling convention. The exact settlement wording (“above” vs “at or above”) is event-specific on Kalshi; if you want the docs to match the market rules text exactly, add a parser/validator for rule text and document it here.
+
+## Thin books: why we don’t rely on asks
+
+Kalshi ladders can be asymmetric: asks may be missing or stale while bids are present. The implementation therefore derives a conservative “buy-now” proxy from the opposite-side best bid instead of assuming a mid or best-ask.
+
+## Buy-now proxy via reciprocal best bid (cents)
+
+Implemented in `kalshi_edge/ladder_eval.py::parse_orderbook_stats`.
+
+Define:
+
+- $b_Y$: best YES bid in cents (`ybid`)
+- $b_N$: best NO bid in cents (`nbid`)
+
+The derived buy-now proxies are:
+
+$$
+\texttt{ybuy} = 100 - b_N
+\qquad
+\texttt{nbuy} = 100 - b_Y
+$$
+
+Interpretation:
+- `ybuy` is the proxy “what you’d likely have to pay to buy YES now” (in cents).
+- `nbuy` is the proxy “what you’d likely have to pay to buy NO now” (in cents).
+
+This is an execution-aware approximation used as the entry price input to EV computations (see `docs/metrics.md` and `kalshi_edge/ladder_eval.py::ev_buy_binary`).
+
+## Limitations / gotchas (as reflected by code)
+
+- **Missing bids**: if $b_Y$ or $b_N$ is missing, the corresponding proxy price is `None` and EV cannot be computed for that side (`parse_orderbook_stats` + `ev_buy_binary`).
+- **Depth**: the code computes a simple depth-within-window metric (`OrderbookStats.depth_y/depth_n`), but the EV calculation itself is still top-of-book/proxy-based (`kalshi_edge/ladder_eval.py::parse_orderbook_stats`).
