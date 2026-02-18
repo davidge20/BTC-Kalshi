@@ -1,23 +1,7 @@
 {
-  "buy_cents": 13,
-  "capture_frac": 0.7,
-  "edge_pp": 0.051672552449076425,
-  "entry_cost": 0.14,
-  "entry_ts_utc": "2026-02-10T21:24:32.340645+00:00",
-  "event_ticker": "KXBTCD-26FEB1017",
-  "fee_cents": 1,
-  "filled_contracts": 1,
-  "last_exit_bid_cents": 9,
-  "last_exit_reason": "stop_loss_capture_edge",
-  "last_exit_ts_utc": "2026-02-10T21:25:30.833598+00:00",
-  "market_ticker": "KXBTCD-26FEB1017-T68499.99",
-  "min_stop_pp": 0.06,
-  "open": false,
-  "p_win_entry": 0.19167255244907644,
-  "position_count": 0,
-  "side": "no",
-  "stop_frac": 0.5,
-  "stop_net_exit": 0.08000000000000002,
-  "strike": 68500.0,
-  "target_net_exit": 0.17617078671435352
+  "closed_reason": "event_expired",
+  "closed_ts_utc": "2026-02-17T13:00:10.739459+00:00",
+  "event_ticker": "KXBTCD-26FEB1708",
+  "filled_contracts": 0,
+  "open": false
 }

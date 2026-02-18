@@ -1,6 +1,7 @@
 """
 market_state.py
 
+@brief 
 Build MarketState:
 - spot price (Deribit index)
 - implied volatility estimate (Deribit options, near ATM)
@@ -50,8 +51,8 @@ def deribit_index_price(http: HttpClient, index_name: str = "btc_usd") -> float:
 
 def normalize_mark_iv(x: Any) -> Optional[float]:
     """
-    Deribit mark_iv often comes as a percent (e.g. 84.9 means 84.9%).
-    We normalize to decimal (0.849).
+    Deribit `mark_iv` is treated as a percent (e.g. 84.9 means 84.9%).
+    Normalize to a decimal volatility (0.849).
     """
     if x is None:
         return None
@@ -59,7 +60,9 @@ def normalize_mark_iv(x: Any) -> Optional[float]:
         v = float(x)
     except Exception:
         return None
-    return (v / 100.0) if v > 5.0 else v
+    if v <= 0:
+        return None
+    return v / 100.0
 
 
 def parse_deribit_instrument_name(name: str) -> Optional[Tuple[datetime, float]]:

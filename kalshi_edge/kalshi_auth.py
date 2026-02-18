@@ -3,6 +3,7 @@ kalshi_auth.py
 
 Kalshi Trade API authentication helpers (RSA-PSS signatures).
 
+@brief 
 Per Kalshi docs, every authenticated request requires headers:
   - KALSHI-ACCESS-KEY
   - KALSHI-ACCESS-TIMESTAMP (ms)

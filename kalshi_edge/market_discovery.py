@@ -1,24 +1,23 @@
-# kalshi_edge/market_discovery.py
-
 """
 market_discovery.py
 
-Auto-discovery ("Option A"):
-Find the BTC ABOVE/BELOW event that is closing soon, without needing a URL.
+@brief 
+Auto-discovery:
+If the user doesn't supply `--event` or `--url`, pick the soonest-closing BTC
+Above/Below event by scanning Kalshi `/markets` for markets whose
+`event_ticker` starts with `KXBTCD-`.
 
-This version is deliberately *robust*:
-- Kalshi /markets payloads can vary a bit (fields may be missing or named differently)
-- We print useful samples when discovery fails
-- We use timezone-aware UTC consistently
+Currently, we are focusing on the `KXBTCD-` market
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from datetime import datetime
+from typing import List, Optional
 
 from kalshi_edge.constants import KALSHI
+from kalshi_edge.formatting import parse_iso8601, utc_now
 from kalshi_edge.http_client import HttpClient
 
 
@@ -28,17 +27,6 @@ class DiscoveredEvent:
     market_title: str
     close_time: str
     minutes_left: float
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _parse_iso8601(s: str) -> datetime:
-    """Kalshi uses a Z suffix; normalize to Python's +00:00 format."""
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    return datetime.fromisoformat(s)
 
 
 def _list_markets_closing_soon(
@@ -52,8 +40,7 @@ def _list_markets_closing_soon(
     Pull markets closing in [min_close_ts, max_close_ts], handling cursor pagination.
 
     Notes:
-    - Some APIs return "cursor", some return "next_cursor".
-    - Some return the market list under "markets"; we handle that.
+    - Responses typically include `markets` and optionally a pagination cursor.
     """
     all_markets: List[dict] = []
     cursor: Optional[str] = None
@@ -88,16 +75,14 @@ def _get_str(m: dict, *keys: str) -> str:
     return ""
 
 
-def _looks_like_btc_abovebelow_family(event_ticker: str) -> bool:
-    # Your observed family: KXBTCD-...
+def _is_kxbtcd_event(event_ticker: str) -> bool:
+    """Return True if this looks like a BTC Above/Below event ticker."""
     return event_ticker.upper().startswith("KXBTCD-")
 
 
 def discover_current_event(
     window_minutes: int = 70,
     debug_http: bool = False,
-    # Be less strict than "bitcoin price" because titles vary.
-    title_keywords: Tuple[str, ...] = ("bitcoin", "btc", "above", "below"),
 ) -> DiscoveredEvent:
     """
     Discover the soonest-closing BTC Above/Below event by scanning markets closing soon.
@@ -107,7 +92,6 @@ def discover_current_event(
     - keep those that:
         * have an event_ticker that looks like KXBTCD-...
         * have a close_time
-        * have a title that mentions something BTC-ish
     - choose the soonest close_time
     """
     http = HttpClient(debug=debug_http)
@@ -128,46 +112,22 @@ def discover_current_event(
         title = _get_str(m, "title", "market_title", "name")
         close_time = _get_str(m, "close_time", "closeTime")
 
-        if not event_ticker or not _looks_like_btc_abovebelow_family(event_ticker):
+        if not event_ticker or not _is_kxbtcd_event(event_ticker):
             continue
         if not close_time:
-            continue
-
-        # Title keyword check (loose)
-        tlow = title.lower()
-        if title and not any(kw in tlow for kw in title_keywords):
-            # If title is empty, don't filter it out — some payloads omit it.
             continue
 
         candidates.append(m)
 
     if not candidates:
-        # Print a useful sample so you can see what fields you actually got.
-        print("\n[Discover] No candidates found. Showing samples from /markets response:\n")
-
-        # show first 25 markets with close_time
-        shown = 0
-        for m in markets:
-            ct = _get_str(m, "close_time", "closeTime")
-            if not ct:
-                continue
-            et = _get_str(m, "event_ticker", "eventTicker", "event")
-            t = _get_str(m, "title", "market_title", "name")
-            cat = _get_str(m, "category", "Category")
-            print(f"- close_time={ct} category={cat} event_ticker={et} title={t[:90]}")
-            shown += 1
-            if shown >= 25:
-                break
-
         raise RuntimeError(
             "Could not auto-discover a KXBTCD event from /markets. "
-            "Try widening --window-minutes (e.g. 360 or 1440), "
-            "or pass --event manually."
+            "Try widening --window-minutes (e.g. 360 or 1440), or pass --event/--url."
         )
 
     # choose soonest-closing
     def close_dt(m: dict) -> datetime:
-        return _parse_iso8601(_get_str(m, "close_time", "closeTime"))
+        return parse_iso8601(_get_str(m, "close_time", "closeTime"))
 
     chosen = min(candidates, key=close_dt)
 

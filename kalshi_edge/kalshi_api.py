@@ -1,53 +1,31 @@
-"""
-kalshi_api.py
+"""Kalshi API helpers for ladder market selection.
 
-Thin functions for Kalshi:
-- fetch event w/ nested markets
-- fetch a market orderbook
-- extract ABOVE ladder markets
-- convert floor_strike to an intuitive strike price
-
-We intentionally keep this module dumb: just "get data" and "parse basic fields".
+@brief
+- Identify the KXBTCD ABOVE threshold contracts from an event's nested markets.
+- Derive trade-ready metadata from Kalshi's ladder encoding (time remaining, strike).
+- Provide access to market orderbooks and authenticated portfolio endpoints.
 """
 
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List, Optional, Tuple, Dict, Any
-
-from kalshi_edge.constants import KALSHI
-from kalshi_edge.http_client import HttpClient
-
 from typing import Protocol
+from kalshi_edge.constants import KALSHI
+from kalshi_edge.formatting import parse_iso8601, utc_now
+from kalshi_edge.http_client import HttpClient
 
 class KalshiAuthLike(Protocol):
     """Structural type for objects that can generate Kalshi auth headers."""
     def headers(self, method: str, path: str, timestamp_ms: Optional[str] = None) -> Dict[str, str]: ...
 
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def parse_iso8601(s: str) -> datetime:
-    """Kalshi uses a Z suffix; normalize to Python's +00:00 format."""
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    return datetime.fromisoformat(s)
-
-
 def event_ticker_from_url(url: str) -> str:
-    """
-    Example:
-      https://kalshi.com/markets/kxbtcd/bitcoin-price-abovebelow/kxbtcd-26feb0518
-    -> KXBTCD-26FEB0518
-    """
+    """Extract the event ticker from a Kalshi market URL."""
     s = url.strip().rstrip("/")
     return s.split("/")[-1].upper()
 
 
 def get_event(http: HttpClient, event_ticker: str) -> Dict[str, Any]:
-    """Fetch event including nested markets."""
+    """Fetch an event including nested markets."""
     return http.get_json(f"{KALSHI}/events/{event_ticker}", params={"with_nested_markets": "true"})
 
 
@@ -62,12 +40,7 @@ def create_order(
     *,
     base_url: str = KALSHI,
 ) -> Dict[str, Any]:
-    """Create an order (authenticated).
-
-    base_url should include the "/trade-api/v2" suffix (e.g.
-    "https://api.elections.kalshi.com/trade-api/v2" or
-    "https://demo-api.kalshi.co/trade-api/v2").
-    """
+    """Create an order (authenticated)."""
     path = "/trade-api/v2/portfolio/orders"
     headers = auth.headers("POST", path)
     headers["Content-Type"] = "application/json"
@@ -134,6 +107,8 @@ def above_markets_from_event(event_json: dict) -> Tuple[str, List[dict], float]:
             close_times.append(parse_iso8601(ct))
 
     now = utc_now()
+    # Ladders can contain multiple close times; treat the *earliest* as the
+    # effective deadline so downstream logic doesn't assume extra time that isn't there.
     close_time = min(close_times) if close_times else now
     minutes_left = max(0.0, (close_time - now).total_seconds() / 60.0)
 
@@ -144,9 +119,6 @@ def market_strike_from_floor(market: dict) -> Optional[float]:
     """
     In Kalshi KXBTCD ladders the threshold is represented by floor_strike=59999.99
     which corresponds to "$60,000 or above".
-
-    So we convert:
-      strike = floor_strike + 0.01  (and round)
     """
     fs = market.get("floor_strike")
     if fs is None:
