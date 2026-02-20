@@ -119,12 +119,21 @@ class V2Trader:
         dry_run: bool = False,
         subaccount: Optional[int] = None,
         config: StrategyConfig | None = None,
+        run_id: Optional[str] = None,
+        base_log_fields: Optional[Dict[str, Any]] = None,
+        strict_log_schema: bool = False,
+        full_config_on_start: Optional[Dict[str, Any]] = None,
     ):
         self.http = http
         self.auth = auth
         self.kalshi_base_url = kalshi_base_url
         self.state_file = state_file
-        self.log = TradeLogger(trade_log_file)
+        self.log = TradeLogger(
+            trade_log_file,
+            run_id=run_id,
+            base_fields=base_log_fields,
+            strict_schema=bool(strict_log_schema),
+        )
 
         self.cfg: StrategyConfig = config or load_config()
 
@@ -150,6 +159,7 @@ class V2Trader:
         self.cancel_stale_seconds = int(self.cfg.CANCEL_STALE_SECONDS)
         self.p_requote_pp = float(self.cfg.P_REQUOTE_PP)
         self.max_entries_per_tick = int(self.cfg.MAX_ENTRIES_PER_TICK)
+        self.log_top_n_candidates = int(getattr(self.cfg, "LOG_TOP_N_CANDIDATES", 5))
 
         self.max_contracts_per_market = int(self.cfg.MAX_CONTRACTS_PER_MARKET)
         self.allow_scale_in = bool(self.cfg.ALLOW_SCALE_IN)
@@ -190,6 +200,15 @@ class V2Trader:
         self.active_order_by_market: Dict[str, str] = {}
 
         self._load_from_state_file()
+
+        start_payload: Dict[str, Any] = {
+            "schema": SCHEMA,
+            "state_file": str(self.state_file),
+            "trade_log_file": str(trade_log_file),
+        }
+        if full_config_on_start:
+            start_payload.update(full_config_on_start)
+        self.log.log("bot_start", start_payload)
 
     # ---- state ----
 
@@ -553,6 +572,33 @@ class V2Trader:
         out.sort(key=lambda c: c.ev, reverse=True)
         return out
 
+    def _cand_log_fields(self, cand: _ActionCandidate, result: EvaluationResult) -> Dict[str, Any]:
+        ms = result.market_state
+        p_yes = float(cand.p_yes)
+        p_win = p_yes if cand.side == "yes" else (1.0 - p_yes)
+        return {
+            "event_ticker": str(result.event_ticker),
+            "market_ticker": str(cand.market_ticker),
+            "side": str(cand.side),
+            "source": str(cand.source),
+            "price_cents": int(cand.price_cents),
+            "fee_cents": int(cand.fee_cents),
+            "p_yes": float(p_yes),
+            "p_win": float(p_win),
+            "implied_q_yes": float(cand.implied_q_yes) if cand.implied_q_yes is not None else None,
+            "edge_pp": float(cand.edge_pp),
+            "ev": float(cand.ev),
+            "bid_cents": int(cand.bid_cents) if cand.bid_cents is not None else None,
+            "ask_proxy_cents": int(cand.ask_proxy_cents) if cand.ask_proxy_cents is not None else None,
+            "spread_cents": int(cand.spread_cents) if cand.spread_cents is not None else None,
+            "top_size": float(cand.top_size) if cand.top_size is not None else None,
+            "strike": float(cand.strike),
+            "subtitle": str(cand.subtitle),
+            "minutes_left": float(result.minutes_left),
+            "spot": float(ms.spot),
+            "sigma_blend": float(ms.sigma_blend),
+        }
+
     # ---- orders ----
 
     def _cleanup_order_refs(self, order_id: str) -> None:
@@ -668,6 +714,19 @@ class V2Trader:
 
     def _cancel_order(self, tracked: Dict[str, Any], *, reason: str) -> bool:
         oid = str(tracked.get("order_id"))
+        self.log.log(
+            "decision",
+            {
+                "action": "cancel",
+                "reason": str(reason),
+                "order_id": oid,
+                "market_ticker": str(tracked.get("market_ticker") or ""),
+                "side": str(tracked.get("side") or ""),
+                "source": str(tracked.get("source") or ""),
+                "price_cents": _as_int(tracked.get("price_cents"), 0),
+                "count": _as_int(tracked.get("remaining_count"), _as_int(tracked.get("count"), 0)),
+            },
+        )
         self.log.log("order_cancel_submit", {"order_id": oid, "reason": str(reason)})
         try:
             resp = self.om.submit_cancel(tracked)
@@ -678,9 +737,40 @@ class V2Trader:
         self._cleanup_order_refs(oid)
         return True
 
-    def _amend_order(self, tracked: Dict[str, Any], *, new_price_cents: int, new_count: int) -> bool:
+    def _amend_order(
+        self,
+        tracked: Dict[str, Any],
+        *,
+        new_price_cents: int,
+        new_count: int,
+        reason: str,
+        cand: Optional[_ActionCandidate] = None,
+        result: Optional[EvaluationResult] = None,
+    ) -> bool:
         oid = str(tracked.get("order_id"))
-        self.log.log("order_amend_submit", {"order_id": oid, "new_price_cents": int(new_price_cents), "new_count": int(new_count)})
+        dec: Dict[str, Any] = {
+            "action": "amend",
+            "reason": str(reason),
+            "order_id": oid,
+            "market_ticker": str(tracked.get("market_ticker") or ""),
+            "side": str(tracked.get("side") or ""),
+            "source": str(tracked.get("source") or ""),
+            "price_cents": int(new_price_cents),
+            "count": int(new_count),
+        }
+        if cand is not None and result is not None:
+            dec.update(self._cand_log_fields(cand, result))
+        self.log.log("decision", dec)
+
+        self.log.log(
+            "order_amend_submit",
+            {
+                "order_id": oid,
+                "new_price_cents": int(new_price_cents),
+                "new_count": int(new_count),
+                "reason": str(reason),
+            },
+        )
         try:
             resp = self.om.submit_amend(tracked, new_price_cents=int(new_price_cents), new_count=int(new_count))
             self.open_orders[oid] = tracked
@@ -690,10 +780,43 @@ class V2Trader:
             self.log.log("order_amend_failed", {"order_id": oid, "error": str(e), "dry_run": self.dry_run})
             return False
 
-    def _create_order_for_candidate(self, cand: _ActionCandidate, *, remaining_to_target: int) -> bool:
+    def _create_order_for_candidate(
+        self,
+        cand: _ActionCandidate,
+        *,
+        remaining_to_target: int,
+        result: Optional[EvaluationResult] = None,
+        reason: str = "best_ev",
+    ) -> bool:
         tif = self.taker_time_in_force if cand.source == "taker" else self.maker_time_in_force
         key = market_side_key(cand.market_ticker, cand.side)
-        self.log.log("order_submit", {"mode": cand.source, "market_ticker": cand.market_ticker, "side": cand.side, "count": int(remaining_to_target), "price_cents": int(cand.price_cents), "tif": str(tif), "post_only": bool(self.post_only and cand.source == "maker")})
+        dec: Dict[str, Any] = {
+            "action": "submit",
+            "reason": str(reason),
+            "market_ticker": str(cand.market_ticker),
+            "side": str(cand.side),
+            "source": str(cand.source),
+            "price_cents": int(cand.price_cents),
+            "count": int(remaining_to_target),
+        }
+        if result is not None:
+            dec.update(self._cand_log_fields(cand, result))
+        self.log.log("decision", dec)
+
+        self.log.log(
+            "order_submit",
+            {
+                "mode": cand.source,
+                "source": cand.source,
+                "market_ticker": cand.market_ticker,
+                "side": cand.side,
+                "count": int(remaining_to_target),
+                "price_cents": int(cand.price_cents),
+                "tif": str(tif),
+                "post_only": bool(self.post_only and cand.source == "maker"),
+                "reason": str(reason),
+            },
+        )
         tracked, _resp = self.om.submit_new_order(
             market_ticker=cand.market_ticker,
             event_ticker=cand.event_ticker,
@@ -772,6 +895,29 @@ class V2Trader:
                 changed = True
 
         cands = self._build_candidates(result)
+        ms = result.market_state
+        top = cands[0] if cands else None
+        self.log.log(
+            "tick_summary",
+            {
+                "event_ticker": str(result.event_ticker),
+                "minutes_left": float(result.minutes_left),
+                "spot": float(ms.spot),
+                "sigma_implied": float(ms.sigma_implied),
+                "sigma_realized": float(ms.sigma_realized),
+                "sigma_blend": float(ms.sigma_blend),
+                "confidence": str(ms.confidence),
+                "num_rows_scanned": int(len(result.rows)),
+                "top_ev": float(top.ev) if top is not None else None,
+                "top_edge_pp": float(top.edge_pp) if top is not None else None,
+                "top_market_ticker": str(top.market_ticker) if top is not None else None,
+                "top_side": str(top.side) if top is not None else None,
+                "top_source": str(top.source) if top is not None else None,
+            },
+        )
+        n = max(0, int(self.log_top_n_candidates))
+        for cand in cands[:n]:
+            self.log.log("candidate", self._cand_log_fields(cand, result))
         submitted = 0
 
         for cand in cands:
@@ -780,7 +926,9 @@ class V2Trader:
 
             pos = self.open_positions.get(cand.market_ticker)
             if pos is not None and str(pos.get("side")) and str(pos.get("side")) != str(cand.side):
-                self.log.log("skip", {"market_ticker": cand.market_ticker, "side": cand.side, "skip_reason": "position_side_conflict"})
+                payload = {"market_ticker": cand.market_ticker, "side": cand.side, "skip_reason": "position_side_conflict"}
+                payload.update(self._cand_log_fields(cand, result))
+                self.log.log("skip", payload)
                 continue
 
             current, target, size_reason = self._target_contracts_for_candidate(pos, cand)
@@ -788,7 +936,9 @@ class V2Trader:
             if remaining <= 0:
                 continue
             if size_reason is not None:
-                self.log.log("skip", {"market_ticker": cand.market_ticker, "side": cand.side, "skip_reason": str(size_reason)})
+                payload = {"market_ticker": cand.market_ticker, "side": cand.side, "skip_reason": str(size_reason)}
+                payload.update(self._cand_log_fields(cand, result))
+                self.log.log("skip", payload)
                 continue
 
             key = market_side_key(cand.market_ticker, cand.side)
@@ -809,12 +959,20 @@ class V2Trader:
                                     "skip_reason": "amend_throttled",
                                     "order_id": existing_oid,
                                     "seconds_since_last_amend": float(amend_age),
+                                    **self._cand_log_fields(cand, result),
                                 },
                             )
                             continue
                         tracked["last_model_p"] = float(cand.p_yes)
                         tracked["last_edge_pp"] = float(cand.edge_pp)
-                        if self._amend_order(tracked, new_price_cents=int(cand.price_cents), new_count=int(remaining)):
+                        if self._amend_order(
+                            tracked,
+                            new_price_cents=int(cand.price_cents),
+                            new_count=int(remaining),
+                            reason="requote",
+                            cand=cand,
+                            result=result,
+                        ):
                             changed = True
                             submitted += 1
                             continue
@@ -831,10 +989,12 @@ class V2Trader:
                 is_new_market_in_event=is_new_market_in_event,
             )
             if cap_reason is not None:
-                self.log.log("skip", {"market_ticker": cand.market_ticker, "side": cand.side, "skip_reason": cap_reason})
+                payload = {"market_ticker": cand.market_ticker, "side": cand.side, "skip_reason": cap_reason}
+                payload.update(self._cand_log_fields(cand, result))
+                self.log.log("skip", payload)
                 continue
 
-            if self._create_order_for_candidate(cand, remaining_to_target=int(remaining)):
+            if self._create_order_for_candidate(cand, remaining_to_target=int(remaining), result=result, reason="best_ev"):
                 changed = True
                 submitted += 1
 

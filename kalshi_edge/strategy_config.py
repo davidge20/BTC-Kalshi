@@ -46,6 +46,7 @@ Example JSON:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -162,6 +163,13 @@ class StrategyConfig:
     SCALE_IN_MIN_EV: float = 0.06  # default MIN_EV + 0.01 (adjusted if MIN_EV overridden and SCALE_IN_MIN_EV absent)
     MAX_ENTRIES_PER_TICK: int = 1
 
+    # --- logging knobs ---
+    LOG_TOP_N_CANDIDATES: int = 5
+
+    # --- evaluation / API budget knobs ---
+    # Limits number of Kalshi orderbooks fetched per tick (closest-to-spot strikes).
+    MAX_STRIKES: int = 10
+
     # --- fees ---
     FEE_CENTS: int = 1
 
@@ -184,6 +192,10 @@ class StrategyConfig:
             raise ValueError("ORDER_SIZE must be >= 1")
         if int(self.MAX_ENTRIES_PER_TICK) < 1:
             raise ValueError("MAX_ENTRIES_PER_TICK must be >= 1")
+        if int(self.LOG_TOP_N_CANDIDATES) < 0:
+            raise ValueError("LOG_TOP_N_CANDIDATES must be >= 0")
+        if int(self.MAX_STRIKES) < 1:
+            raise ValueError("MAX_STRIKES must be >= 1")
         if int(self.MAX_CONTRACTS_PER_MARKET) < 1:
             raise ValueError("MAX_CONTRACTS_PER_MARKET must be >= 1")
         if float(self.SCALE_IN_MIN_EV) < float(self.MIN_EV):
@@ -362,6 +374,39 @@ def load_config() -> StrategyConfig:
     cfg = _apply_overrides(replace(DEFAULT_CONFIG), {str(k): v for k, v in data.items() if isinstance(k, str)}, present_keys=present)
     cfg.validate()
     return cfg
+
+
+def config_source_path() -> Optional[str]:
+    """
+    Return the config JSON path (if any) used to load config.
+    """
+    p = os.environ.get(ENV_VAR)
+    return str(p) if p else None
+
+
+def config_to_dict(cfg: StrategyConfig) -> Dict[str, Any]:
+    """
+    Convert StrategyConfig into a plain JSON-serializable dict (including nested paper config).
+    """
+    if not isinstance(cfg, StrategyConfig):
+        raise TypeError(f"cfg must be a StrategyConfig (got {type(cfg).__name__})")
+    out: Dict[str, Any] = {}
+    for k in cfg.__dataclass_fields__.keys():
+        v = getattr(cfg, k)
+        if is_dataclass(v):
+            out[k] = {kk: getattr(v, kk) for kk in v.__dataclass_fields__.keys()}
+        else:
+            out[k] = v
+    return out
+
+
+def config_hash(cfg: StrategyConfig) -> str:
+    """
+    Stable sha256 of config fields (sorted JSON, compact separators).
+    """
+    payload = config_to_dict(cfg)
+    b = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(b).hexdigest()
 
 
 def _self_test() -> None:

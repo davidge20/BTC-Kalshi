@@ -1,0 +1,784 @@
+{
+  "active_order_by_market": {},
+  "event_cost": {
+    "KXBTCD-26FEB2001": 1.09,
+    "KXBTCD-26FEB2002": 0.71,
+    "KXBTCD-26FEB2003": 0.56,
+    "KXBTCD-26FEB2004": 0.53,
+    "KXBTCD-26FEB2005": 0.92,
+    "KXBTCD-26FEB2006": 0.56,
+    "KXBTCD-26FEB2007": 0.56,
+    "KXBTCD-26FEB2008": 0.56,
+    "KXBTCD-26FEB2009": 0.5
+  },
+  "event_positions": {
+    "KXBTCD-26FEB2001": 2,
+    "KXBTCD-26FEB2002": 3,
+    "KXBTCD-26FEB2003": 3,
+    "KXBTCD-26FEB2004": 3,
+    "KXBTCD-26FEB2005": 4,
+    "KXBTCD-26FEB2006": 3,
+    "KXBTCD-26FEB2007": 3,
+    "KXBTCD-26FEB2008": 3,
+    "KXBTCD-26FEB2009": 1
+  },
+  "market_cost": {
+    "KXBTCD-26FEB2001-T67499.99": 0.86,
+    "KXBTCD-26FEB2001-T67749.99": 0.23,
+    "KXBTCD-26FEB2002-T67499.99": 0.21,
+    "KXBTCD-26FEB2002-T67749.99": 0.31,
+    "KXBTCD-26FEB2002-T67999.99": 0.19,
+    "KXBTCD-26FEB2003-T67499.99": 0.09,
+    "KXBTCD-26FEB2003-T67749.99": 0.28,
+    "KXBTCD-26FEB2003-T67999.99": 0.19,
+    "KXBTCD-26FEB2004-T67499.99": 0.03,
+    "KXBTCD-26FEB2004-T67749.99": 0.29,
+    "KXBTCD-26FEB2004-T67999.99": 0.21,
+    "KXBTCD-26FEB2005-T67499.99": 0.05,
+    "KXBTCD-26FEB2005-T67749.99": 0.28,
+    "KXBTCD-26FEB2005-T67999.99": 0.32,
+    "KXBTCD-26FEB2005-T68249.99": 0.27,
+    "KXBTCD-26FEB2006-T67999.99": 0.16,
+    "KXBTCD-26FEB2006-T68249.99": 0.31,
+    "KXBTCD-26FEB2006-T68499.99": 0.09,
+    "KXBTCD-26FEB2007-T67499.99": 0.06,
+    "KXBTCD-26FEB2007-T67749.99": 0.29,
+    "KXBTCD-26FEB2007-T67999.99": 0.21,
+    "KXBTCD-26FEB2008-T67249.99": 0.2,
+    "KXBTCD-26FEB2008-T67499.99": 0.24,
+    "KXBTCD-26FEB2008-T67749.99": 0.12,
+    "KXBTCD-26FEB2009-T66749.99": 0.5
+  },
+  "open_orders": {},
+  "open_positions": {
+    "KXBTCD-26FEB2001-T67499.99": {
+      "event_ticker": "KXBTCD-26FEB2001",
+      "fills": [
+        {
+          "cost_dollars": 0.86,
+          "count": 1,
+          "edge_pp": 0.0896601437047636,
+          "ev": 0.0896601437047636,
+          "fee_cents": 1,
+          "fill_id": "75c4b338-9897-4dfd-99a7-9277971c2241",
+          "order_id": "DRYRUN-d1a64a6c-bb44-4787-ac95-e114b6495c4f",
+          "p_yes": 0.9496601437047636,
+          "price_cents": 85,
+          "source": "maker",
+          "ts_utc": "2026-02-20T05:40:22.759311+00:00"
+        }
+      ],
+      "implied_q_yes": 0.84,
+      "last_fill_edge_pp": 0.0896601437047636,
+      "last_fill_price_cents": 85,
+      "last_fill_ts_utc": "2026-02-20T05:40:22.759311+00:00",
+      "market_ticker": "KXBTCD-26FEB2001-T67499.99",
+      "side": "yes",
+      "strike": 67500.0,
+      "subtitle": "$67,500 or above",
+      "total_cost_dollars": 0.86,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2001-T67749.99": {
+      "event_ticker": "KXBTCD-26FEB2001",
+      "fills": [
+        {
+          "cost_dollars": 0.23,
+          "count": 1,
+          "edge_pp": -0.012424126414907893,
+          "ev": -0.012424126414907893,
+          "fee_cents": 1,
+          "fill_id": "bc6a8a57-eb7a-4c99-869c-d9acb7bcd3c2",
+          "order_id": "DRYRUN-1a830063-fbc8-438c-a465-afc4dd480abd",
+          "p_yes": 0.7824241264149079,
+          "price_cents": 22,
+          "source": "maker",
+          "ts_utc": "2026-02-20T05:55:18.486078+00:00"
+        }
+      ],
+      "implied_q_yes": 0.88,
+      "last_fill_edge_pp": -0.012424126414907893,
+      "last_fill_price_cents": 22,
+      "last_fill_ts_utc": "2026-02-20T05:55:18.486078+00:00",
+      "market_ticker": "KXBTCD-26FEB2001-T67749.99",
+      "side": "no",
+      "strike": 67750.0,
+      "subtitle": "$67,750 or above",
+      "total_cost_dollars": 0.23,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2002-T67499.99": {
+      "event_ticker": "KXBTCD-26FEB2002",
+      "fills": [
+        {
+          "cost_dollars": 0.21,
+          "count": 1,
+          "edge_pp": 0.05678396504471858,
+          "ev": 0.05678396504471858,
+          "fee_cents": 1,
+          "fill_id": "c31a1287-1868-4789-a326-34c88119aed7",
+          "order_id": "DRYRUN-fabd1431-c12b-4573-a9fb-169b9c98a645",
+          "p_yes": 0.7332160349552814,
+          "price_cents": 20,
+          "source": "maker",
+          "ts_utc": "2026-02-20T06:01:49.623172+00:00"
+        }
+      ],
+      "implied_q_yes": 0.82,
+      "last_fill_edge_pp": 0.05678396504471858,
+      "last_fill_price_cents": 20,
+      "last_fill_ts_utc": "2026-02-20T06:01:49.623172+00:00",
+      "market_ticker": "KXBTCD-26FEB2002-T67499.99",
+      "side": "no",
+      "strike": 67500.0,
+      "subtitle": "$67,500 or above",
+      "total_cost_dollars": 0.21,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2002-T67749.99": {
+      "event_ticker": "KXBTCD-26FEB2002",
+      "fills": [
+        {
+          "cost_dollars": 0.31,
+          "count": 1,
+          "edge_pp": 0.06164089917204657,
+          "ev": 0.06164089917204657,
+          "fee_cents": 1,
+          "fill_id": "864b3259-c555-4dad-a6de-2f9794946298",
+          "order_id": "DRYRUN-d1cdf0ae-8b68-4f37-9f68-36681cf9ccb0",
+          "p_yes": 0.6283591008279534,
+          "price_cents": 30,
+          "source": "maker",
+          "ts_utc": "2026-02-20T06:13:34.709493+00:00"
+        }
+      ],
+      "implied_q_yes": 0.72,
+      "last_fill_edge_pp": 0.06164089917204657,
+      "last_fill_price_cents": 30,
+      "last_fill_ts_utc": "2026-02-20T06:13:34.709493+00:00",
+      "market_ticker": "KXBTCD-26FEB2002-T67749.99",
+      "side": "no",
+      "strike": 67750.0,
+      "subtitle": "$67,750 or above",
+      "total_cost_dollars": 0.31,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2002-T67999.99": {
+      "event_ticker": "KXBTCD-26FEB2002",
+      "fills": [
+        {
+          "cost_dollars": 0.19,
+          "count": 1,
+          "edge_pp": 0.0575121806210826,
+          "ev": 0.0575121806210826,
+          "fee_cents": 1,
+          "fill_id": "ec460b73-05fb-474f-8ca0-2daa914a7e5d",
+          "order_id": "DRYRUN-910da37e-b2f7-4bff-af4e-bead2c256e44",
+          "p_yes": 0.2475121806210826,
+          "price_cents": 18,
+          "source": "maker",
+          "ts_utc": "2026-02-20T06:01:16.768641+00:00"
+        }
+      ],
+      "implied_q_yes": 0.18,
+      "last_fill_edge_pp": 0.0575121806210826,
+      "last_fill_price_cents": 18,
+      "last_fill_ts_utc": "2026-02-20T06:01:16.768641+00:00",
+      "market_ticker": "KXBTCD-26FEB2002-T67999.99",
+      "side": "yes",
+      "strike": 68000.0,
+      "subtitle": "$68,000 or above",
+      "total_cost_dollars": 0.19,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2003-T67499.99": {
+      "event_ticker": "KXBTCD-26FEB2003",
+      "fills": [
+        {
+          "cost_dollars": 0.09,
+          "count": 1,
+          "edge_pp": 0.0761693681838865,
+          "ev": 0.0761693681838865,
+          "fee_cents": 1,
+          "fill_id": "98936ae7-9909-41ee-84b8-604c68e25a0c",
+          "order_id": "DRYRUN-0131275b-d378-4efd-8449-84b4e866f600",
+          "p_yes": 0.8338306318161135,
+          "price_cents": 8,
+          "source": "maker",
+          "ts_utc": "2026-02-20T07:01:26.327981+00:00"
+        }
+      ],
+      "implied_q_yes": 0.93,
+      "last_fill_edge_pp": 0.0761693681838865,
+      "last_fill_price_cents": 8,
+      "last_fill_ts_utc": "2026-02-20T07:01:26.327981+00:00",
+      "market_ticker": "KXBTCD-26FEB2003-T67499.99",
+      "side": "no",
+      "strike": 67500.0,
+      "subtitle": "$67,500 or above",
+      "total_cost_dollars": 0.09,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2003-T67749.99": {
+      "event_ticker": "KXBTCD-26FEB2003",
+      "fills": [
+        {
+          "cost_dollars": 0.28,
+          "count": 1,
+          "edge_pp": 0.049229831461019447,
+          "ev": 0.049229831461019447,
+          "fee_cents": 1,
+          "fill_id": "5d607bb6-1786-4bba-9dde-cd3fee664fc8",
+          "order_id": "DRYRUN-39340a82-bfb9-44d8-a799-06eb1142a4b4",
+          "p_yes": 0.6707701685389805,
+          "price_cents": 27,
+          "source": "maker",
+          "ts_utc": "2026-02-20T07:22:13.391055+00:00"
+        }
+      ],
+      "implied_q_yes": 0.76,
+      "last_fill_edge_pp": 0.049229831461019447,
+      "last_fill_price_cents": 27,
+      "last_fill_ts_utc": "2026-02-20T07:22:13.391055+00:00",
+      "market_ticker": "KXBTCD-26FEB2003-T67749.99",
+      "side": "no",
+      "strike": 67750.0,
+      "subtitle": "$67,750 or above",
+      "total_cost_dollars": 0.28,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2003-T67999.99": {
+      "event_ticker": "KXBTCD-26FEB2003",
+      "fills": [
+        {
+          "cost_dollars": 0.19,
+          "count": 1,
+          "edge_pp": 0.09254123063441805,
+          "ev": 0.09254123063441805,
+          "fee_cents": 1,
+          "fill_id": "a3347dfe-c2ac-4340-a946-48da63c5b290",
+          "order_id": "DRYRUN-64daa1d0-6ab6-427f-8265-e78e87e84726",
+          "p_yes": 0.28254123063441805,
+          "price_cents": 18,
+          "source": "maker",
+          "ts_utc": "2026-02-20T07:04:58.215343+00:00"
+        }
+      ],
+      "implied_q_yes": 0.18,
+      "last_fill_edge_pp": 0.09254123063441805,
+      "last_fill_price_cents": 18,
+      "last_fill_ts_utc": "2026-02-20T07:04:58.215343+00:00",
+      "market_ticker": "KXBTCD-26FEB2003-T67999.99",
+      "side": "yes",
+      "strike": 68000.0,
+      "subtitle": "$68,000 or above",
+      "total_cost_dollars": 0.19,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2004-T67499.99": {
+      "event_ticker": "KXBTCD-26FEB2004",
+      "fills": [
+        {
+          "cost_dollars": 0.03,
+          "count": 1,
+          "edge_pp": 0.058540118180843176,
+          "ev": 0.058540118180843176,
+          "fee_cents": 1,
+          "fill_id": "1cbf28c8-3c1f-4324-bf1a-5853432b859f",
+          "order_id": "DRYRUN-c202b6cb-9c6a-4f52-98d2-7765f66b66b1",
+          "p_yes": 0.9114598818191568,
+          "price_cents": 2,
+          "source": "maker",
+          "ts_utc": "2026-02-20T08:17:04.109079+00:00"
+        }
+      ],
+      "implied_q_yes": 0.99,
+      "last_fill_edge_pp": 0.058540118180843176,
+      "last_fill_price_cents": 2,
+      "last_fill_ts_utc": "2026-02-20T08:17:04.109079+00:00",
+      "market_ticker": "KXBTCD-26FEB2004-T67499.99",
+      "side": "no",
+      "strike": 67500.0,
+      "subtitle": "$67,500 or above",
+      "total_cost_dollars": 0.03,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2004-T67749.99": {
+      "event_ticker": "KXBTCD-26FEB2004",
+      "fills": [
+        {
+          "cost_dollars": 0.29,
+          "count": 1,
+          "edge_pp": 0.07563030106376706,
+          "ev": 0.07563030106376706,
+          "fee_cents": 1,
+          "fill_id": "47a612d1-f6b9-40cd-9317-260d9e5afa0d",
+          "order_id": "DRYRUN-1765bbb5-545b-4878-b1e8-a96379198b8c",
+          "p_yes": 0.634369698936233,
+          "price_cents": 28,
+          "source": "maker",
+          "ts_utc": "2026-02-20T08:12:59.172047+00:00"
+        }
+      ],
+      "implied_q_yes": 0.73,
+      "last_fill_edge_pp": 0.07563030106376706,
+      "last_fill_price_cents": 28,
+      "last_fill_ts_utc": "2026-02-20T08:12:59.172047+00:00",
+      "market_ticker": "KXBTCD-26FEB2004-T67749.99",
+      "side": "no",
+      "strike": 67750.0,
+      "subtitle": "$67,750 or above",
+      "total_cost_dollars": 0.29,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2004-T67999.99": {
+      "event_ticker": "KXBTCD-26FEB2004",
+      "fills": [
+        {
+          "cost_dollars": 0.21,
+          "count": 1,
+          "edge_pp": 0.06433928105220063,
+          "ev": 0.06433928105220063,
+          "fee_cents": 1,
+          "fill_id": "71d8c01f-22f6-4d62-9e7f-675335fa5f21",
+          "order_id": "DRYRUN-0d448cbc-c581-40e3-a5aa-76efb6a565b9",
+          "p_yes": 0.2743392810522006,
+          "price_cents": 20,
+          "source": "maker",
+          "ts_utc": "2026-02-20T08:00:58.394938+00:00"
+        }
+      ],
+      "implied_q_yes": 0.2,
+      "last_fill_edge_pp": 0.06433928105220063,
+      "last_fill_price_cents": 20,
+      "last_fill_ts_utc": "2026-02-20T08:00:58.394938+00:00",
+      "market_ticker": "KXBTCD-26FEB2004-T67999.99",
+      "side": "yes",
+      "strike": 68000.0,
+      "subtitle": "$68,000 or above",
+      "total_cost_dollars": 0.21,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2005-T67499.99": {
+      "event_ticker": "KXBTCD-26FEB2005",
+      "fills": [
+        {
+          "cost_dollars": 0.05,
+          "count": 1,
+          "edge_pp": 0.0598860624335074,
+          "ev": 0.0598860624335074,
+          "fee_cents": 1,
+          "fill_id": "2b5c0042-acd7-4a46-9c34-5f528e0dda53",
+          "order_id": "DRYRUN-3d179ff5-369d-4460-ad64-6dd423bfd000",
+          "p_yes": 0.8901139375664926,
+          "price_cents": 4,
+          "source": "maker",
+          "ts_utc": "2026-02-20T09:01:02.207251+00:00"
+        }
+      ],
+      "implied_q_yes": 0.97,
+      "last_fill_edge_pp": 0.0598860624335074,
+      "last_fill_price_cents": 4,
+      "last_fill_ts_utc": "2026-02-20T09:01:02.207251+00:00",
+      "market_ticker": "KXBTCD-26FEB2005-T67499.99",
+      "side": "no",
+      "strike": 67500.0,
+      "subtitle": "$67,500 or above",
+      "total_cost_dollars": 0.05,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2005-T67749.99": {
+      "event_ticker": "KXBTCD-26FEB2005",
+      "fills": [
+        {
+          "cost_dollars": 0.28,
+          "count": 1,
+          "edge_pp": 0.07612967848928409,
+          "ev": 0.07612967848928409,
+          "fee_cents": 1,
+          "fill_id": "2d4bd63c-be37-4712-9f6d-fb24ed0b60da",
+          "order_id": "DRYRUN-a29b266d-dcda-4fd5-be20-bc07331ff765",
+          "p_yes": 0.6438703215107159,
+          "price_cents": 27,
+          "source": "maker",
+          "ts_utc": "2026-02-20T09:00:40.059160+00:00"
+        }
+      ],
+      "implied_q_yes": 0.74,
+      "last_fill_edge_pp": 0.07612967848928409,
+      "last_fill_price_cents": 27,
+      "last_fill_ts_utc": "2026-02-20T09:00:40.059160+00:00",
+      "market_ticker": "KXBTCD-26FEB2005-T67749.99",
+      "side": "no",
+      "strike": 67750.0,
+      "subtitle": "$67,750 or above",
+      "total_cost_dollars": 0.28,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2005-T67999.99": {
+      "event_ticker": "KXBTCD-26FEB2005",
+      "fills": [
+        {
+          "cost_dollars": 0.32,
+          "count": 1,
+          "edge_pp": 0.03746186643134358,
+          "ev": 0.03746186643134358,
+          "fee_cents": 1,
+          "fill_id": "77bb0fcc-2dfa-4a4a-a6d3-afb115dec297",
+          "order_id": "DRYRUN-a6b09efa-e448-4656-b9b6-2dc337d548d6",
+          "p_yes": 0.6425381335686564,
+          "price_cents": 31,
+          "source": "maker",
+          "ts_utc": "2026-02-20T09:03:05.522142+00:00"
+        }
+      ],
+      "implied_q_yes": 0.72,
+      "last_fill_edge_pp": 0.03746186643134358,
+      "last_fill_price_cents": 31,
+      "last_fill_ts_utc": "2026-02-20T09:03:05.522142+00:00",
+      "market_ticker": "KXBTCD-26FEB2005-T67999.99",
+      "side": "no",
+      "strike": 68000.0,
+      "subtitle": "$68,000 or above",
+      "total_cost_dollars": 0.32,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2005-T68249.99": {
+      "event_ticker": "KXBTCD-26FEB2005",
+      "fills": [
+        {
+          "cost_dollars": 0.27,
+          "count": 1,
+          "edge_pp": 0.04734014659685992,
+          "ev": 0.04734014659685992,
+          "fee_cents": 1,
+          "fill_id": "f2bed12d-c8cb-4e4d-a49d-7586a42c4766",
+          "order_id": "DRYRUN-af982412-2210-4348-87ae-57e48e84e0a6",
+          "p_yes": 0.31734014659685994,
+          "price_cents": 26,
+          "source": "maker",
+          "ts_utc": "2026-02-20T09:28:10.855999+00:00"
+        }
+      ],
+      "implied_q_yes": 0.25,
+      "last_fill_edge_pp": 0.04734014659685992,
+      "last_fill_price_cents": 26,
+      "last_fill_ts_utc": "2026-02-20T09:28:10.855999+00:00",
+      "market_ticker": "KXBTCD-26FEB2005-T68249.99",
+      "side": "yes",
+      "strike": 68250.0,
+      "subtitle": "$68,250 or above",
+      "total_cost_dollars": 0.27,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2006-T67999.99": {
+      "event_ticker": "KXBTCD-26FEB2006",
+      "fills": [
+        {
+          "cost_dollars": 0.16,
+          "count": 1,
+          "edge_pp": 0.09979773451973575,
+          "ev": 0.09979773451973575,
+          "fee_cents": 1,
+          "fill_id": "d7eb5df0-cf4e-4bef-8780-c6a5c2977dca",
+          "order_id": "DRYRUN-c79554c7-fe8e-4df7-9fc3-b7e6b15fc314",
+          "p_yes": 0.7402022654802642,
+          "price_cents": 15,
+          "source": "maker",
+          "ts_utc": "2026-02-20T10:01:54.596312+00:00"
+        }
+      ],
+      "implied_q_yes": 0.87,
+      "last_fill_edge_pp": 0.09979773451973575,
+      "last_fill_price_cents": 15,
+      "last_fill_ts_utc": "2026-02-20T10:01:54.596312+00:00",
+      "market_ticker": "KXBTCD-26FEB2006-T67999.99",
+      "side": "no",
+      "strike": 68000.0,
+      "subtitle": "$68,000 or above",
+      "total_cost_dollars": 0.16,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2006-T68249.99": {
+      "event_ticker": "KXBTCD-26FEB2006",
+      "fills": [
+        {
+          "cost_dollars": 0.31,
+          "count": 1,
+          "edge_pp": 0.07134998790116948,
+          "ev": 0.07134998790116948,
+          "fee_cents": 1,
+          "fill_id": "c7f7631b-d15f-4e30-a80e-1abf7ea30f67",
+          "order_id": "DRYRUN-abda090f-accd-4807-856f-6bd48bbd5791",
+          "p_yes": 0.3813499879011695,
+          "price_cents": 30,
+          "source": "maker",
+          "ts_utc": "2026-02-20T10:03:58.513266+00:00"
+        }
+      ],
+      "implied_q_yes": 0.3,
+      "last_fill_edge_pp": 0.07134998790116948,
+      "last_fill_price_cents": 30,
+      "last_fill_ts_utc": "2026-02-20T10:03:58.513266+00:00",
+      "market_ticker": "KXBTCD-26FEB2006-T68249.99",
+      "side": "yes",
+      "strike": 68250.0,
+      "subtitle": "$68,250 or above",
+      "total_cost_dollars": 0.31,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2006-T68499.99": {
+      "event_ticker": "KXBTCD-26FEB2006",
+      "fills": [
+        {
+          "cost_dollars": 0.09,
+          "count": 1,
+          "edge_pp": 0.0791627934402512,
+          "ev": 0.0791627934402512,
+          "fee_cents": 1,
+          "fill_id": "0acb3cea-26d1-4e06-a781-9c30ff3efd2a",
+          "order_id": "DRYRUN-675ac516-4363-4771-b45c-f308cf8bd1a3",
+          "p_yes": 0.1691627934402512,
+          "price_cents": 8,
+          "source": "maker",
+          "ts_utc": "2026-02-20T10:01:32.256401+00:00"
+        }
+      ],
+      "implied_q_yes": 0.08,
+      "last_fill_edge_pp": 0.0791627934402512,
+      "last_fill_price_cents": 8,
+      "last_fill_ts_utc": "2026-02-20T10:01:32.256401+00:00",
+      "market_ticker": "KXBTCD-26FEB2006-T68499.99",
+      "side": "yes",
+      "strike": 68500.0,
+      "subtitle": "$68,500 or above",
+      "total_cost_dollars": 0.09,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2007-T67499.99": {
+      "event_ticker": "KXBTCD-26FEB2007",
+      "fills": [
+        {
+          "cost_dollars": 0.06,
+          "count": 1,
+          "edge_pp": 0.05426057235696141,
+          "ev": 0.05426057235696141,
+          "fee_cents": 1,
+          "fill_id": "7545662e-c8aa-4447-934b-2c8d93cb8e6b",
+          "order_id": "DRYRUN-27c2cff4-b90a-4434-9af0-68b09c7cb1f8",
+          "p_yes": 0.8857394276430386,
+          "price_cents": 5,
+          "source": "maker",
+          "ts_utc": "2026-02-20T11:24:15.729422+00:00"
+        }
+      ],
+      "implied_q_yes": 0.96,
+      "last_fill_edge_pp": 0.05426057235696141,
+      "last_fill_price_cents": 5,
+      "last_fill_ts_utc": "2026-02-20T11:24:15.729422+00:00",
+      "market_ticker": "KXBTCD-26FEB2007-T67499.99",
+      "side": "no",
+      "strike": 67500.0,
+      "subtitle": "$67,500 or above",
+      "total_cost_dollars": 0.06,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2007-T67749.99": {
+      "event_ticker": "KXBTCD-26FEB2007",
+      "fills": [
+        {
+          "cost_dollars": 0.29,
+          "count": 1,
+          "edge_pp": 0.062267560095502106,
+          "ev": 0.062267560095502106,
+          "fee_cents": 1,
+          "fill_id": "ecd8a16d-a96b-4551-9b72-2f9461bd2996",
+          "order_id": "DRYRUN-615efd27-ef33-4a19-9dbc-4bbb8b8545b1",
+          "p_yes": 0.6477324399044979,
+          "price_cents": 28,
+          "source": "maker",
+          "ts_utc": "2026-02-20T11:32:15.636127+00:00"
+        }
+      ],
+      "implied_q_yes": 0.75,
+      "last_fill_edge_pp": 0.062267560095502106,
+      "last_fill_price_cents": 28,
+      "last_fill_ts_utc": "2026-02-20T11:32:15.636127+00:00",
+      "market_ticker": "KXBTCD-26FEB2007-T67749.99",
+      "side": "no",
+      "strike": 67750.0,
+      "subtitle": "$67,750 or above",
+      "total_cost_dollars": 0.29,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2007-T67999.99": {
+      "event_ticker": "KXBTCD-26FEB2007",
+      "fills": [
+        {
+          "cost_dollars": 0.21,
+          "count": 1,
+          "edge_pp": 0.016752635285010004,
+          "ev": 0.016752635285010004,
+          "fee_cents": 1,
+          "fill_id": "c29c8cbd-973c-40c6-8d2b-8a4a7d96dbfa",
+          "order_id": "DRYRUN-3eb0cdc7-67a3-4187-b72a-91f58c75f363",
+          "p_yes": 0.22675263528501,
+          "price_cents": 20,
+          "source": "maker",
+          "ts_utc": "2026-02-20T11:11:59.793486+00:00"
+        }
+      ],
+      "implied_q_yes": 0.18,
+      "last_fill_edge_pp": 0.016752635285010004,
+      "last_fill_price_cents": 20,
+      "last_fill_ts_utc": "2026-02-20T11:11:59.793486+00:00",
+      "market_ticker": "KXBTCD-26FEB2007-T67999.99",
+      "side": "yes",
+      "strike": 68000.0,
+      "subtitle": "$68,000 or above",
+      "total_cost_dollars": 0.21,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2008-T67249.99": {
+      "event_ticker": "KXBTCD-26FEB2008",
+      "fills": [
+        {
+          "cost_dollars": 0.2,
+          "count": 1,
+          "edge_pp": 0.055402369614115876,
+          "ev": 0.055402369614115876,
+          "fee_cents": 1,
+          "fill_id": "73c18f9e-a090-4c0e-8265-9ea5478e14a1",
+          "order_id": "DRYRUN-744d885c-4303-4985-93c6-01deff18aec3",
+          "p_yes": 0.7445976303858841,
+          "price_cents": 19,
+          "source": "maker",
+          "ts_utc": "2026-02-20T12:25:21.675592+00:00"
+        }
+      ],
+      "implied_q_yes": 0.83,
+      "last_fill_edge_pp": 0.055402369614115876,
+      "last_fill_price_cents": 19,
+      "last_fill_ts_utc": "2026-02-20T12:25:21.675592+00:00",
+      "market_ticker": "KXBTCD-26FEB2008-T67249.99",
+      "side": "no",
+      "strike": 67250.0,
+      "subtitle": "$67,250 or above",
+      "total_cost_dollars": 0.2,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2008-T67499.99": {
+      "event_ticker": "KXBTCD-26FEB2008",
+      "fills": [
+        {
+          "cost_dollars": 0.24,
+          "count": 1,
+          "edge_pp": 0.055482337071000476,
+          "ev": 0.055482337071000476,
+          "fee_cents": 1,
+          "fill_id": "78994cc9-f17d-4901-9ec3-33641ef262f0",
+          "order_id": "DRYRUN-32bd593e-2858-4c0b-958e-78b81970b7f5",
+          "p_yes": 0.29548233707100047,
+          "price_cents": 23,
+          "source": "maker",
+          "ts_utc": "2026-02-20T12:18:42.120893+00:00"
+        }
+      ],
+      "implied_q_yes": 0.21,
+      "last_fill_edge_pp": 0.055482337071000476,
+      "last_fill_price_cents": 23,
+      "last_fill_ts_utc": "2026-02-20T12:18:42.120893+00:00",
+      "market_ticker": "KXBTCD-26FEB2008-T67499.99",
+      "side": "yes",
+      "strike": 67500.0,
+      "subtitle": "$67,500 or above",
+      "total_cost_dollars": 0.24,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2008-T67749.99": {
+      "event_ticker": "KXBTCD-26FEB2008",
+      "fills": [
+        {
+          "cost_dollars": 0.12,
+          "count": 1,
+          "edge_pp": 0.06273076566265556,
+          "ev": 0.06273076566265556,
+          "fee_cents": 1,
+          "fill_id": "ac2ecc2d-2b4f-43d5-8524-417c671cabd8",
+          "order_id": "DRYRUN-e75e67c8-0a2d-4cfd-9c2a-dabb32af1155",
+          "p_yes": 0.18273076566265556,
+          "price_cents": 11,
+          "source": "maker",
+          "ts_utc": "2026-02-20T12:17:20.510106+00:00"
+        }
+      ],
+      "implied_q_yes": 0.11,
+      "last_fill_edge_pp": 0.06273076566265556,
+      "last_fill_price_cents": 11,
+      "last_fill_ts_utc": "2026-02-20T12:17:20.510106+00:00",
+      "market_ticker": "KXBTCD-26FEB2008-T67749.99",
+      "side": "yes",
+      "strike": 67750.0,
+      "subtitle": "$67,750 or above",
+      "total_cost_dollars": 0.12,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    },
+    "KXBTCD-26FEB2009-T66749.99": {
+      "event_ticker": "KXBTCD-26FEB2009",
+      "fills": [
+        {
+          "cost_dollars": 0.5,
+          "count": 1,
+          "edge_pp": -0.17144704570551383,
+          "ev": -0.17144704570551383,
+          "fee_cents": 1,
+          "fill_id": "2aa0a813-dbfc-4183-b111-87ca03570090",
+          "order_id": "DRYRUN-9975716d-7818-4544-89da-97fe7432724e",
+          "p_yes": 0.32855295429448617,
+          "price_cents": 49,
+          "source": "maker",
+          "ts_utc": "2026-02-20T13:58:32.389246+00:00"
+        }
+      ],
+      "implied_q_yes": 0.26,
+      "last_fill_edge_pp": -0.17144704570551383,
+      "last_fill_price_cents": 49,
+      "last_fill_ts_utc": "2026-02-20T13:58:32.389246+00:00",
+      "market_ticker": "KXBTCD-26FEB2009-T66749.99",
+      "side": "yes",
+      "strike": 66750.0,
+      "subtitle": "$66,750 or above",
+      "total_cost_dollars": 0.5,
+      "total_count": 1,
+      "total_fee_dollars": 0.01
+    }
+  },
+  "positions_count_all": 25,
+  "schema": "v2.2",
+  "total_cost_all": 5.989999999999999,
+  "ts_utc": "2026-02-20T14:01:40.140640+00:00"
+}

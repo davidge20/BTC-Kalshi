@@ -129,13 +129,24 @@ class V1Trader:
         enable_edge_flip_exit: bool = True,
         edge_flip_pp: float = 0.02,         # 2pp: if holding is worse than selling now by >2pp
         dry_run: bool = False,
+        subaccount: Optional[int] = None,
+        run_id: Optional[str] = None,
+        base_log_fields: Optional[Dict[str, Any]] = None,
+        strict_log_schema: bool = False,
+        full_config_on_start: Optional[Dict[str, Any]] = None,
     ):
         self.http = http
         self.auth = auth
         self.kalshi_base_url = kalshi_base_url
         self.state_file = state_file
 
-        self.log = TradeLogger(trade_log_file)
+        self.subaccount = int(subaccount) if subaccount is not None else None
+        self.log = TradeLogger(
+            trade_log_file,
+            run_id=run_id,
+            base_fields=base_log_fields,
+            strict_schema=bool(strict_log_schema),
+        )
 
         self.fee_cents = int(fee_cents)
         self.count = int(count)
@@ -155,7 +166,7 @@ class V1Trader:
 
         self._cap_logged = False
 
-        self.log.log("bot_start", {
+        start_payload: Dict[str, Any] = {
             "state_file": self.state_file,
             "trade_log_file": trade_log_file,
             "fee_cents": self.fee_cents,
@@ -169,7 +180,10 @@ class V1Trader:
             "enable_edge_flip_exit": self.enable_edge_flip_exit,
             "edge_flip_pp": self.edge_flip_pp,
             "dry_run": self.dry_run,
-        })
+        }
+        if full_config_on_start:
+            start_payload.update(full_config_on_start)
+        self.log.log("bot_start", start_payload)
 
     # -------- cap helpers --------
 
@@ -366,12 +380,14 @@ class V1Trader:
     def _place_order(
         self,
         *,
+        reason: str,
         action: str,
         ticker: str,
         side: str,
         price_cents: int,
         count: int,
         reduce_only: bool,
+        decision_fields: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         payload: Dict[str, Any] = {
             "ticker": ticker,
@@ -390,22 +406,40 @@ class V1Trader:
         else:
             payload["no_price"] = int(price_cents)
 
-        self.log.log("order_submit", {
-            "action": action,
-            "ticker": ticker,
-            "side": side,
-            "count": int(count),
+        dec: Dict[str, Any] = {
+            "action": "submit",
+            "reason": str(reason),
+            "market_ticker": str(ticker),
+            "side": str(side),
+            "source": "taker",
             "price_cents": int(price_cents),
-            "reduce_only": bool(reduce_only),
-            "dry_run": self.dry_run,
-        })
+            "count": int(count),
+        }
+        if decision_fields:
+            dec.update(decision_fields)
+        self.log.log("decision", dec)
+
+        self.log.log(
+            "order_submit",
+            {
+                "reason": str(reason),
+                "action": action,
+                "market_ticker": ticker,
+                "ticker": ticker,  # legacy alias
+                "side": side,
+                "count": int(count),
+                "price_cents": int(price_cents),
+                "reduce_only": bool(reduce_only),
+                "dry_run": self.dry_run,
+            },
+        )
 
         if self.dry_run:
             print(f"[TRADE] DRY_RUN {action.upper()} ...")
             return {"order": {"status": "filled", "fill_count": int(count)}}
 
 
-        resp = create_order(self.http, self.auth, payload, base_url=self.kalshi_base_url)
+        resp = create_order(self.http, self.auth, payload, base_url=self.kalshi_base_url, subaccount=self.subaccount)
         self.log.log("order_response", {
             "action": action,
             "ticker": ticker,
@@ -564,6 +598,7 @@ class V1Trader:
 
         self.log.log("exit_signal", {
             "reason": reason,
+            "market_ticker": ticker,
             "ticker": ticker,
             "side": side,
             "bid_cents": int(bid_cents),
@@ -573,12 +608,18 @@ class V1Trader:
         })
 
         resp = self._place_order(
+            reason="exit_signal",
             action="sell",
             ticker=ticker,
             side=side,
             price_cents=int(bid_cents),
             count=sell_count,
             reduce_only=True,
+            decision_fields={
+                "minutes_left": float(result.minutes_left),
+                "spot": float(result.market_state.spot),
+                "sigma_blend": float(result.market_state.sigma_blend),
+            },
         )
         if resp is None:
             return
@@ -605,6 +646,7 @@ class V1Trader:
 
             self.log.log("exit_filled", {
                 "reason": reason,
+                "market_ticker": ticker,
                 "ticker": ticker,
                 "side": side,
                 "sell_count": int(sell_count),
@@ -667,12 +709,25 @@ class V1Trader:
         })
 
         resp = self._place_order(
+            reason="entry_signal",
             action="buy",
             ticker=cand.market_ticker,
             side=cand.side,
             price_cents=int(cand.buy_cents),
             count=order_count,
             reduce_only=False,
+            decision_fields={
+                "event_ticker": str(result.event_ticker),
+                "p_yes": float(cand.p_model),
+                "p_win": float(p_win_entry),
+                "edge_pp": float(edge_pp),
+                "ev": float(edge_pp),
+                "strike": float(cand.strike),
+                "subtitle": str(cand.subtitle),
+                "minutes_left": float(result.minutes_left),
+                "spot": float(result.market_state.spot),
+                "sigma_blend": float(result.market_state.sigma_blend),
+            },
         )
         if resp is None:
             return
@@ -730,6 +785,46 @@ class V1Trader:
     # -------- main tick --------
 
     def on_tick(self, result: EvaluationResult) -> None:
+        ms = result.market_state
+        top_ev = None
+        top_edge_pp = None
+        top_market_ticker = None
+        top_side = None
+        for row in result.rows:
+            if row.ob.ybuy is not None and row.ev_yes is not None:
+                ev = float(row.ev_yes)
+                if top_ev is None or ev > float(top_ev):
+                    top_ev = ev
+                    top_edge_pp = ev
+                    top_market_ticker = str(row.ticker)
+                    top_side = "yes"
+            if row.ob.nbuy is not None and row.ev_no is not None:
+                ev = float(row.ev_no)
+                if top_ev is None or ev > float(top_ev):
+                    top_ev = ev
+                    top_edge_pp = ev
+                    top_market_ticker = str(row.ticker)
+                    top_side = "no"
+
+        self.log.log(
+            "tick_summary",
+            {
+                "event_ticker": str(result.event_ticker),
+                "minutes_left": float(result.minutes_left),
+                "spot": float(ms.spot),
+                "sigma_implied": float(ms.sigma_implied),
+                "sigma_realized": float(ms.sigma_realized),
+                "sigma_blend": float(ms.sigma_blend),
+                "confidence": str(ms.confidence),
+                "num_rows_scanned": int(len(result.rows)),
+                "top_ev": float(top_ev) if top_ev is not None else None,
+                "top_edge_pp": float(top_edge_pp) if top_edge_pp is not None else None,
+                "top_market_ticker": top_market_ticker,
+                "top_side": top_side,
+                "top_source": "taker" if top_market_ticker is not None else None,
+            },
+        )
+
         st = _read_state(self.state_file)
 
         if st.get("open"):

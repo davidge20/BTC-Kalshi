@@ -148,6 +148,12 @@ def pick_markets_near_spot(markets: List[dict], spot: float, max_strikes: int, b
         return []
 
     prep_sorted = sorted(prep, key=lambda t: abs(t[1] - spot))
+
+    # When we're intentionally limiting to a small number of strikes, make it *strictly*
+    # the closest-to-spot strikes (no extra band heuristics).
+    if int(max_strikes) <= 10:
+        return prep_sorted[:max_strikes]
+
     lo = spot * (1.0 - band_pct / 100.0)
     hi = spot * (1.0 + band_pct / 100.0)
     in_band = [t for t in prep_sorted if lo <= t[1] <= hi]
