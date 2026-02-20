@@ -14,7 +14,7 @@ Core concepts
 -------------
 
 Kalshi contract semantics:
-- "ABOVE strike" event settles to 1 if BTC settlement price $\ge$ strike at expiry, else 0.
+- "ABOVE strike" event settles to 1 if BTC settlement price $\\ge$ strike at expiry, else 0.
 - Each market has YES and NO shares (complements, but not perfectly due to spread/fees).
 - Our model produces P(ABOVE). Strategy compares that probability to executable prices
   on each side (YES or NO) to identify potential mispricings.
@@ -84,4 +84,5 @@ __all__ = [
     "trade_log",
     "trader_v0",
     "trader_v1",
+    "trader_v2",
 ]

@@ -1,0 +1,32 @@
+{
+  "MIN_EV": 0.05,
+  "ORDER_SIZE": 1,
+  "MAX_COST_PER_EVENT": 5.0,
+  "MAX_POSITIONS_PER_EVENT": 5,
+  "MAX_COST_PER_MARKET": 2.0,
+  "MAX_CONTRACTS_PER_MARKET": 1,
+  "MIN_TOP_SIZE": 1.0,
+  "SPREAD_MAX_CENTS": 30,
+  "DEDUPE_MARKETS": true,
+  "ALLOW_SCALE_IN": false,
+  "SCALE_IN_COOLDOWN_SECONDS": 60,
+  "SCALE_IN_MIN_EV": 0.06,
+  "MAX_ENTRIES_PER_TICK": 1,
+  "FEE_CENTS": 1,
+  "ORDER_MODE": "maker_only",
+  "POST_ONLY": true,
+  "ORDER_REFRESH_SECONDS": 10,
+  "CANCEL_STALE_SECONDS": 60,
+  "P_REQUOTE_PP": 0.02,
+  "paper": {
+    "simulate_maker_fills": true,
+    "tick_seconds": 1,
+    "min_top_time_seconds": 3,
+    "fill_prob_per_tick": 0.15,
+    "partial_fill": true,
+    "max_fill_per_tick": 1,
+    "slippage_cents": 0,
+    "seed": 12345
+  }
+}
+

@@ -39,12 +39,110 @@ def create_order(
     order_data: Dict[str, Any],
     *,
     base_url: str = KALSHI,
+    subaccount: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Create an order (authenticated)."""
     path = "/trade-api/v2/portfolio/orders"
     headers = auth.headers("POST", path)
     headers["Content-Type"] = "application/json"
-    return http.post_json(f"{base_url}/portfolio/orders", json_body=order_data, headers=headers)
+    params: Dict[str, Any] = {}
+    if subaccount is not None:
+        params["subaccount"] = int(subaccount)
+    url = f"{base_url}/portfolio/orders"
+    if params:
+        return http.request_json("POST", url, params=params, headers=headers, json_body=order_data)
+    return http.post_json(url, json_body=order_data, headers=headers)
+
+
+def get_order(
+    http: HttpClient,
+    auth: KalshiAuthLike,
+    order_id: str,
+    *,
+    base_url: str = KALSHI,
+    subaccount: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Get one order by id (authenticated)."""
+    order_id = str(order_id)
+    path = f"/trade-api/v2/portfolio/orders/{order_id}"
+    headers = auth.headers("GET", path)
+    params: Dict[str, Any] = {}
+    if subaccount is not None:
+        params["subaccount"] = int(subaccount)
+    return http.get_json(f"{base_url}/portfolio/orders/{order_id}", params=params or None, headers=headers)
+
+
+def get_orders(
+    http: HttpClient,
+    auth: KalshiAuthLike,
+    *,
+    base_url: str = KALSHI,
+    status: Optional[str] = None,
+    ticker: Optional[str] = None,
+    event_ticker: Optional[str] = None,
+    limit: int = 200,
+    cursor: Optional[str] = None,
+    subaccount: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List portfolio orders (authenticated)."""
+    path = "/trade-api/v2/portfolio/orders"
+    headers = auth.headers("GET", path)
+    params: Dict[str, Any] = {"limit": int(limit)}
+    if status:
+        params["status"] = str(status)
+    if ticker:
+        params["ticker"] = str(ticker)
+    if event_ticker:
+        params["event_ticker"] = str(event_ticker)
+    if cursor:
+        params["cursor"] = str(cursor)
+    if subaccount is not None:
+        params["subaccount"] = int(subaccount)
+    return http.get_json(f"{base_url}/portfolio/orders", params=params, headers=headers)
+
+
+def cancel_order(
+    http: HttpClient,
+    auth: KalshiAuthLike,
+    order_id: str,
+    *,
+    base_url: str = KALSHI,
+    subaccount: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Cancel one order (authenticated)."""
+    order_id = str(order_id)
+    path = f"/trade-api/v2/portfolio/orders/{order_id}"
+    headers = auth.headers("DELETE", path)
+    params: Dict[str, Any] = {}
+    if subaccount is not None:
+        params["subaccount"] = int(subaccount)
+    return http.request_json("DELETE", f"{base_url}/portfolio/orders/{order_id}", params=params or None, headers=headers)
+
+
+def amend_order(
+    http: HttpClient,
+    auth: KalshiAuthLike,
+    order_id: str,
+    amend_data: Dict[str, Any],
+    *,
+    base_url: str = KALSHI,
+    subaccount: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Amend an order (price and/or max fillable contracts)."""
+    order_id = str(order_id)
+    path = f"/trade-api/v2/portfolio/orders/{order_id}/amend"
+    headers = auth.headers("POST", path)
+    headers["Content-Type"] = "application/json"
+    params: Dict[str, Any] = {}
+    if subaccount is not None:
+        params["subaccount"] = int(subaccount)
+    return http.request_json(
+        "POST",
+        f"{base_url}/portfolio/orders/{order_id}/amend",
+        params=params or None,
+        headers=headers,
+        json_body=amend_data,
+    )
 
 
 def get_positions(

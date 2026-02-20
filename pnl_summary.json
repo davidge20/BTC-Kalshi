@@ -1,0 +1,301 @@
+{
+  "averages_all": {
+    "avg_break_even_prob": 0.35980544747081755,
+    "avg_cost": 0.35980544747081755,
+    "avg_edge_prob": 0.07249261766716576,
+    "avg_expected_pnl": 0.07249261766716576,
+    "avg_p_win_model": 0.4322980651379826
+  },
+  "averages_resolved": {
+    "avg_cost": null,
+    "avg_expected_pnl": null
+  },
+  "bins": {
+    "break_even_prob": [
+      {
+        "N": 176,
+        "avg_break_even_prob": 0.07210227272727278,
+        "avg_edge_prob": 0.07318145078146199,
+        "avg_p_win_model": 0.14528372350873464,
+        "bin": "[0.0,0.1)"
+      },
+      {
+        "N": 450,
+        "avg_break_even_prob": 0.14248888888888878,
+        "avg_edge_prob": 0.07911163422619896,
+        "avg_p_win_model": 0.22160052311508802,
+        "bin": "[0.1,0.2)"
+      },
+      {
+        "N": 200,
+        "avg_break_even_prob": 0.2447500000000002,
+        "avg_edge_prob": 0.0733414321472675,
+        "avg_p_win_model": 0.3180914321472675,
+        "bin": "[0.2,0.3)"
+      },
+      {
+        "N": 84,
+        "avg_break_even_prob": 0.33011904761904765,
+        "avg_edge_prob": 0.06866464171020162,
+        "avg_p_win_model": 0.3987836893292493,
+        "bin": "[0.3,0.4)"
+      },
+      {
+        "N": 10,
+        "avg_break_even_prob": 0.4069999999999999,
+        "avg_edge_prob": 0.06433508050803069,
+        "avg_p_win_model": 0.47133508050803063,
+        "bin": "[0.4,0.5)"
+      },
+      {
+        "N": 2,
+        "avg_break_even_prob": 0.565,
+        "avg_edge_prob": 0.054155075030099975,
+        "avg_p_win_model": 0.6191550750301,
+        "bin": "[0.5,0.6)"
+      },
+      {
+        "N": 29,
+        "avg_break_even_prob": 0.6568965517241379,
+        "avg_edge_prob": 0.0612025032308094,
+        "avg_p_win_model": 0.7180990549549475,
+        "bin": "[0.6,0.7)"
+      },
+      {
+        "N": 64,
+        "avg_break_even_prob": 0.7442187499999998,
+        "avg_edge_prob": 0.06594848805506855,
+        "avg_p_win_model": 0.8101672380550685,
+        "bin": "[0.7,0.8)"
+      },
+      {
+        "N": 171,
+        "avg_break_even_prob": 0.8561988304093562,
+        "avg_edge_prob": 0.06846488904767042,
+        "avg_p_win_model": 0.9246637194570273,
+        "bin": "[0.8,0.9)"
+      },
+      {
+        "N": 99,
+        "avg_break_even_prob": 0.9148484848484854,
+        "avg_edge_prob": 0.05840397796323925,
+        "avg_p_win_model": 0.9732524628117242,
+        "bin": "[0.9,1.0)"
+      },
+      {
+        "N": 0,
+        "avg_break_even_prob": null,
+        "avg_edge_prob": null,
+        "avg_p_win_model": null,
+        "bin": "[1.0,inf)"
+      }
+    ]
+  },
+  "counts": {
+    "by_source_event": {
+      "entry_filled": 1,
+      "skip": 1284
+    },
+    "outcomes_available_markets": 0,
+    "positions": 1285,
+    "resolved_positions": 0,
+    "unique_event_tickers": 9,
+    "unique_market_tickers": 28
+  },
+  "model_stats_resolved": {
+    "avg_p_win_model": null,
+    "brier_score": null,
+    "calibration_gap_pp": null
+  },
+  "percentiles_all": {
+    "break_even_prob": {
+      "0.1": 0.08,
+      "0.25": 0.13,
+      "0.5": 0.2,
+      "0.75": 0.72,
+      "0.9": 0.88
+    },
+    "p_win_model": {
+      "0.1": 0.15469703963282644,
+      "0.25": 0.20597349456584346,
+      "0.5": 0.2862898683519677,
+      "0.75": 0.7811418724570598,
+      "0.9": 0.9495174724299842
+    }
+  },
+  "realized_stats_resolved": {
+    "avg_realized_pnl": null,
+    "losses": 0,
+    "roi": null,
+    "win_rate": null,
+    "wins": 0
+  },
+  "tables": {
+    "by_event_ticker": [
+      {
+        "N": 6,
+        "avg_p_win_model": 0.5111534657212208,
+        "expected_pnl": 0.35692079432732476,
+        "key": "KXBTCD-26FEB1803",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 2.71,
+        "win_rate": null
+      },
+      {
+        "N": 180,
+        "avg_p_win_model": 0.21030109845372277,
+        "expected_pnl": 14.664197721670103,
+        "key": "KXBTCD-26FEB1804",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 23.19000000000001,
+        "win_rate": null
+      },
+      {
+        "N": 214,
+        "avg_p_win_model": 0.29932957713889446,
+        "expected_pnl": 16.826529507723397,
+        "key": "KXBTCD-26FEB1805",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 47.22999999999999,
+        "win_rate": null
+      },
+      {
+        "N": 270,
+        "avg_p_win_model": 0.2612968495728819,
+        "expected_pnl": 22.0101493846781,
+        "key": "KXBTCD-26FEB1806",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 48.53999999999991,
+        "win_rate": null
+      },
+      {
+        "N": 11,
+        "avg_p_win_model": 0.4320123159794999,
+        "expected_pnl": 0.772135475774499,
+        "key": "KXBTCD-26FEB1807",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 3.980000000000001,
+        "win_rate": null
+      },
+      {
+        "N": 226,
+        "avg_p_win_model": 0.2058542553170488,
+        "expected_pnl": 14.02306170165302,
+        "key": "KXBTCD-26FEB1808",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 32.49999999999999,
+        "win_rate": null
+      },
+      {
+        "N": 10,
+        "avg_p_win_model": 0.1797361512247846,
+        "expected_pnl": 0.7173615122478458,
+        "key": "KXBTCD-26FEB1809",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 1.08,
+        "win_rate": null
+      },
+      {
+        "N": 352,
+        "avg_p_win_model": 0.9030430582070171,
+        "expected_pnl": 22.851156488870025,
+        "key": "KXBTCD-26FEB1810",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 295.01999999999975,
+        "win_rate": null
+      },
+      {
+        "N": 16,
+        "avg_p_win_model": 0.5644688197102299,
+        "expected_pnl": 0.9315011153636784,
+        "key": "KXBTCD-26FEB1811",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 8.1,
+        "win_rate": null
+      }
+    ],
+    "by_side": [
+      {
+        "N": 692,
+        "avg_p_win_model": 0.40574949408602684,
+        "expected_pnl": 51.45864990753049,
+        "key": "no",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 229.31999999999968,
+        "win_rate": null
+      },
+      {
+        "N": 593,
+        "avg_p_win_model": 0.463278859687652,
+        "expected_pnl": 41.69436379477754,
+        "key": "yes",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 233.02999999999997,
+        "win_rate": null
+      }
+    ],
+    "by_skip_reason": [
+      {
+        "N": 5,
+        "avg_p_win_model": 0.5323611069128222,
+        "expected_pnl": 0.3018055345641113,
+        "key": "already_entered_market",
+        "realized_pnl": null,
+        "resolved": 0,
+        "share": 0.003894080996884735,
+        "total_cost": 2.3600000000000003,
+        "win_rate": null
+      },
+      {
+        "N": 1279,
+        "avg_p_win_model": 0.4319281414448634,
+        "expected_pnl": 92.79609290798065,
+        "key": "state_event_mismatch",
+        "realized_pnl": null,
+        "resolved": 0,
+        "share": 0.9961059190031153,
+        "total_cost": 459.6400000000006,
+        "win_rate": null
+      }
+    ],
+    "by_source_event": [
+      {
+        "N": 1284,
+        "avg_p_win_model": 0.4323192355471529,
+        "expected_pnl": 93.0978984425448,
+        "key": "skip",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 462.00000000000057,
+        "win_rate": null
+      },
+      {
+        "N": 1,
+        "avg_p_win_model": 0.4051152597632135,
+        "expected_pnl": 0.055115259763213464,
+        "key": "entry_filled",
+        "realized_pnl": null,
+        "resolved": 0,
+        "total_cost": 0.35000000000000003,
+        "win_rate": null
+      }
+    ]
+  },
+  "totals": {
+    "total_cost_all": 462.35000000000053,
+    "total_cost_resolved": 0.0,
+    "total_expected_pnl_all": 93.153013702308,
+    "total_realized_pnl_resolved": 0.0
+  }
+}

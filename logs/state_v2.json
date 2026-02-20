@@ -1,0 +1,26 @@
+{
+  "event_ticker": "KXBTCD-26FEB1803",
+  "open_positions": {
+    "KXBTCD-26FEB1803-T67999.99": {
+      "count": 1,
+      "dry_run": true,
+      "edge_pp_at_entry": 0.05511525976321352,
+      "entry_cost_dollars": 0.35,
+      "entry_fee_dollars": 0.01,
+      "entry_price_cents": 34,
+      "entry_ts_utc": "2026-02-18T07:40:17.126766+00:00",
+      "ev_at_entry": 0.05511525976321352,
+      "event_ticker": "KXBTCD-26FEB1803",
+      "implied_q_yes": 0.34,
+      "market_ticker": "KXBTCD-26FEB1803-T67999.99",
+      "p_at_entry": 0.4051152597632135,
+      "side": "yes",
+      "strike": 68000.0,
+      "subtitle": "$68,000 or above"
+    }
+  },
+  "positions_count": 1,
+  "schema": "v2",
+  "total_cost_event": 0.35,
+  "ts_utc": "2026-02-18T07:40:17.126777+00:00"
+}
