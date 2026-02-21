@@ -12,9 +12,12 @@ import shutil
 import sys
 from typing import List, Optional
 
-from kalshi_edge.formatting import fmt_cents
 from kalshi_edge.ladder_eval import LadderRow
 from kalshi_edge.pipeline import EvaluationResult
+
+
+def fmt_cents(x: Optional[int]) -> str:
+    return "-" if x is None else str(int(x))
 
 
 def _clip_line(line: str, max_width: Optional[int]) -> str:

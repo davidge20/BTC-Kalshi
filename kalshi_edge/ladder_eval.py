@@ -20,7 +20,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 
 from kalshi_edge.http_client import HttpClient
-from kalshi_edge.kalshi_api import get_orderbook, market_strike_from_floor
+from kalshi_edge.data.kalshi.client import get_orderbook
+from kalshi_edge.data.kalshi.models import market_strike_from_floor
 from kalshi_edge.math_models import clamp01, lognormal_prob_above
 
 

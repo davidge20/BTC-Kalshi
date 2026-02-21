@@ -214,3 +214,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# kalshi_edge runtime artifacts
+logs/
+pnl_out/
+markets_cache.json
+trade_log.jsonl
+.kalshi_edge_state.json
+.debug_state_*.json

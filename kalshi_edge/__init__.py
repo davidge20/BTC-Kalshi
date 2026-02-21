@@ -1,20 +1,15 @@
 """
 kalshi_edge
 
-A small research tool to compare:
-- a simple short-horizon lognormal probability model (using blended vol)
-vs
-- Kalshi BTC "ABOVE threshold" binaries (orderbook-derived buy-now proxy prices)
-
-This package is built to answer one question:
-  "Are Kalshi ladder prices consistent with probability implied by deeper BTC markets
-   (spot + options-implied volatility), net of fees and realistic execution?"
+A research + trading CLI that evaluates Kalshi BTC "Above/Below" ladder markets
+against a model probability derived from deeper BTC venues (spot + options IV /
+realized vol).
 
 Core concepts
 -------------
 
 Kalshi contract semantics:
-- "ABOVE strike" event settles to 1 if BTC settlement price $\\ge$ strike at expiry, else 0.
+- "ABOVE strike" event settles to 1 if BTC settlement price >= strike at expiry, else 0.
 - Each market has YES and NO shares (complements, but not perfectly due to spread/fees).
 - Our model produces P(ABOVE). Strategy compares that probability to executable prices
   on each side (YES or NO) to identify potential mispricings.
@@ -23,10 +18,9 @@ MarketState:
   "What is BTC right now, how volatile is it, and how much time is left until expiry?"
 
 Model choice:
-- We use a lognormal/GBM-style approximation for short horizons because it gives a fast,
-  explainable baseline probability anchored to liquid BTC spot/vol markets.
-- "Blended vol" is used to stabilize the estimate vs single-venue noise (single prints,
-  stale quotes, or venue-specific quirks).
+- Lognormal/GBM-style approximation for short horizons — fast, explainable baseline
+  anchored to liquid BTC spot/vol markets.
+- "Blended vol" stabilizes the estimate vs single-venue noise.
 
 Executable price approximation ("buy-now proxy"):
 - Kalshi books are often thin; best-ask can be missing, stale, or non-representative.
@@ -34,45 +28,38 @@ Executable price approximation ("buy-now proxy"):
     YES_buy ≈ 100 - best_bid(NO)
     NO_buy  ≈ 100 - best_bid(YES)
   (in cents, before fees)
-- This is a proxy: complements do not sum to 100 exactly once spread + fees are considered.
-  Treat this as "can I likely get filled near here right now?" rather than a theoretical price.
-
-In more detail, Kalshi ladder order books are often thin and asymmetric, 
-so the “best ask” needed to price an immediate buy can be missing, stale, or based on 
-tiny, non-representative size. To avoid breaking EV/edge calculations 
-(or assuming unrealistic fills), we estimate an executable “buy-now” proxy using 
-the opposite side's best bid and the YES/NO complement relationship for binaries: 
-in cents, YES_buy ≈ 100 - best_bid(NO) and NO_buy ≈ 100 - best_bid(YES). 
-This uses the most reliable live signal (active bids) to infer a conservative 
-buy price even when direct asks are unavailable. Because spreads, discrete 
-pricing, and fees mean complements won't sum to exactly 100 in practice, 
-this proxy should be treated as an execution-aware approximation 
-(“could I likely get filled near here now?”) rather than a frictionless 
-theoretical price.
+- This is an execution-aware approximation, not a frictionless theoretical price.
 
 Edge / EV conventions:
 - edge_pp = model_probability - implied_probability_from_executable_price
 - EV is computed for buy-only entry (taker-style), net of Kalshi fees, per 1 contract.
-- We intentionally ignore maker fills and perfect exits to avoid overstating achievable edge.
 
-Code map
---------
-- market_discovery.py: find the relevant Kalshi event (e.g., closing soon)
-- kalshi_api/http_client/kalshi_auth: authenticated API access + HTTP utilities
-- market_state.py: compute "time-left + spot + vol" inputs for the model
-- math_models.py: probability model(s)
-- ladder_eval.py: apply model vs each strike + compute EV/edge
-- pipeline.py: orchestrates discovery -> fetch -> evaluate
-- render.py: formatting / table output
-- trader_v0/v1.py: (optional) automated entry/exit loop(s)
-- trade_log.py: durable event/trade logging
+Package layout
+--------------
+Top-level modules:
+  run.py              CLI entrypoint (also accessible via __main__.py)
+  strategy_config.py  StrategyConfig dataclass + JSON loader
+  pipeline.py         Orchestrates discovery -> fetch -> evaluate
+  market_discovery.py Find the relevant Kalshi event (e.g., closing soon)
+  market_state.py     Compute "time-left + spot + vol" inputs for the model
+  math_models.py      Probability model(s)
+  ladder_eval.py      Apply model vs each strike + compute EV/edge
+  render.py           Terminal table output
+  trader_v2_engine.py Canonical trading engine (V2Trader)
+  order_manager.py    Single-order lifecycle (create/amend/cancel/fill tracking)
+  trade_log.py        Append-only JSONL event logger
+
+Sub-packages:
+  data/kalshi/        Kalshi API client (client.py) + market-data parsing (models.py)
+  util/               Shared helpers — time.py (timestamps), coerce.py (safe casts)
+  telemetry/          State I/O (state_io.py)
+  report/             Post-run analysis (analyze.py — settlement PnL)
+  legacy/             Deprecated re-exports for trader_v0 / trader_v1
 """
 
 __all__ = [
     "constants",
-    "formatting",
     "http_client",
-    "kalshi_api",
     "kalshi_auth",
     "ladder_eval",
     "market_discovery",
@@ -82,7 +69,11 @@ __all__ = [
     "render",
     "run",
     "trade_log",
-    "trader_v0",
-    "trader_v1",
-    "trader_v2",
+    "trader_v2_engine",
+    # sub-packages
+    "data",
+    "util",
+    "telemetry",
+    "report",
+    "legacy",
 ]

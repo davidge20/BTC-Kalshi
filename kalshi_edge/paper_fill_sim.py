@@ -17,24 +17,11 @@ Notes on order books:
 from __future__ import annotations
 
 import random
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from kalshi_edge.fill_delta import FillDelta
 from kalshi_edge.strategy_config import PaperConfig
-
-
-def _parse_ts(ts_utc: str) -> Optional[datetime]:
-    if not isinstance(ts_utc, str) or not ts_utc:
-        return None
-    try:
-        return datetime.fromisoformat(ts_utc.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from kalshi_edge.util.time import parse_ts, utc_ts
 
 
 class PaperFillSimulator:
@@ -57,7 +44,7 @@ class PaperFillSimulator:
         self._book[str(market_ticker)] = (
             int(best_bid_cents) if best_bid_cents is not None else None,
             int(best_ask_cents) if best_ask_cents is not None else None,
-            str(ts_utc) if isinstance(ts_utc, str) and ts_utc else _utc_now_iso(),
+            str(ts_utc) if isinstance(ts_utc, str) and ts_utc else utc_ts(),
         )
 
     def pop_last_fill_meta(self, order_id: str) -> Optional[Dict[str, Any]]:
@@ -77,8 +64,8 @@ class PaperFillSimulator:
         if not prev:
             self._last_tick_ts[str(order_id)] = str(ts_utc)
             return True
-        dt_prev = _parse_ts(prev)
-        dt_now = _parse_ts(ts_utc)
+        dt_prev = parse_ts(prev)
+        dt_now = parse_ts(ts_utc)
         if dt_prev is None or dt_now is None:
             self._last_tick_ts[str(order_id)] = str(ts_utc)
             return True
@@ -141,8 +128,8 @@ class PaperFillSimulator:
         else:
             if oid not in self._eligible_since_ts:
                 self._eligible_since_ts[oid] = ts_utc
-            eligible_dt = _parse_ts(self._eligible_since_ts.get(oid, ""))
-            now_dt = _parse_ts(ts_utc)
+            eligible_dt = parse_ts(self._eligible_since_ts.get(oid, ""))
+            now_dt = parse_ts(ts_utc)
             if eligible_dt is None or now_dt is None:
                 eligible_seconds = float(self.cfg.min_top_time_seconds)
             else:

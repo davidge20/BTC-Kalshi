@@ -173,12 +173,29 @@ class StrategyConfig:
     # --- fees ---
     FEE_CENTS: int = 1
 
-    # --- maker logic placeholders (used by v2 engine) ---
+    # --- maker logic (used by v2 engine) ---
     ORDER_MODE: str = "hybrid"  # "taker_only"|"maker_only"|"hybrid"
     POST_ONLY: bool = True
     ORDER_REFRESH_SECONDS: int = 10
     CANCEL_STALE_SECONDS: int = 60
     P_REQUOTE_PP: float = 0.02
+
+    # --- evaluation / runtime ---
+    REFRESH_SECONDS: int = 10
+    WINDOW_MINUTES: int = 70
+    BAND_PCT: float = 25.0
+    SORT_MODE: str = "ev"  # "ev"|"strike"|"sens"
+    DEPTH_WINDOW_CENTS: int = 2
+    THREADS: int = 10
+    IV_BAND_PCT: float = 3.0
+    MIN_MINUTES_LEFT: float = 2.0
+
+    # --- behavior flags ---
+    LOCK_EVENT: bool = True
+    LOG_SETTLEMENT: bool = False
+
+    # --- logging paths (optional; CLI/env vars also accepted) ---
+    TRADE_LOG_DIR: Optional[str] = None
 
     # --- paper trading / simulation (nested JSON object under key "paper") ---
     paper: PaperConfig = field(default_factory=PaperConfig)
@@ -221,6 +238,23 @@ class StrategyConfig:
 
         if self.ORDER_MODE not in {"taker_only", "maker_only", "hybrid"}:
             raise ValueError('ORDER_MODE must be one of: "taker_only", "maker_only", "hybrid"')
+
+        if int(self.REFRESH_SECONDS) < 1:
+            raise ValueError("REFRESH_SECONDS must be >= 1")
+        if int(self.WINDOW_MINUTES) < 1:
+            raise ValueError("WINDOW_MINUTES must be >= 1")
+        if float(self.BAND_PCT) <= 0:
+            raise ValueError("BAND_PCT must be > 0")
+        if self.SORT_MODE not in {"ev", "strike", "sens"}:
+            raise ValueError('SORT_MODE must be one of: "ev", "strike", "sens"')
+        if int(self.DEPTH_WINDOW_CENTS) < 0:
+            raise ValueError("DEPTH_WINDOW_CENTS must be >= 0")
+        if int(self.THREADS) < 1:
+            raise ValueError("THREADS must be >= 1")
+        if float(self.IV_BAND_PCT) < 0:
+            raise ValueError("IV_BAND_PCT must be >= 0")
+        if float(self.MIN_MINUTES_LEFT) < 0:
+            raise ValueError("MIN_MINUTES_LEFT must be >= 0")
 
         if not isinstance(self.paper, PaperConfig):
             raise ValueError("paper must be an object")
@@ -407,6 +441,7 @@ def config_hash(cfg: StrategyConfig) -> str:
     payload = config_to_dict(cfg)
     b = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(b).hexdigest()
+
 
 
 def _self_test() -> None:

@@ -1,7 +1,11 @@
 """
-trader_v2_engine.py
+trader_v2_engine.py — canonical trading engine (V2Trader).
 
-Clean v2.2 strategy-iteration engine used by `kalshi_edge.trader_v2`.
+This is the primary execution engine for kalshi_edge. It manages position
+entry/exit, order lifecycle (via OrderManager), risk caps, and structured
+JSONL logging.
+
+Previous engines (trader_v0, trader_v1) are deprecated; see legacy/.
 """
 
 from __future__ import annotations
@@ -13,70 +17,29 @@ import random
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from kalshi_edge.http_client import HttpClient
-from kalshi_edge.kalshi_auth import KalshiAuth
+from kalshi_edge.data.kalshi.client import HttpClientLike, KalshiAuthLike
 from kalshi_edge.fill_delta import FillDelta
-from kalshi_edge.order_manager import OrderManager, market_side_key, utc_ts
+from kalshi_edge.order_manager import OrderManager, market_side_key
 from kalshi_edge.paper_fill_sim import PaperFillSimulator
-from kalshi_edge.pipeline import EvaluationResult
-from kalshi_edge.strategy_config import StrategyConfig, load_config
+from kalshi_edge.strategy_config import StrategyConfig, PaperConfig, load_config
 from kalshi_edge.trade_log import TradeLogger
+from kalshi_edge.telemetry.state_io import read_state as _read_state, write_state as _write_state
+from kalshi_edge.util.coerce import as_int as _as_int, as_float as _as_float
+from kalshi_edge.util.time import utc_ts, parse_ts as _parse_ts, secs_since as _secs_since
+
+if TYPE_CHECKING:
+    from kalshi_edge.pipeline import EvaluationResult
 
 
 SCHEMA = "v2.2"
 
 
-def _read_state(path: str) -> Dict[str, Any]:
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
 
-
-def _write_state(path: str, data: Dict[str, Any]) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, sort_keys=True)
-    os.replace(tmp, path)
-
-
-def _as_float(x: Any, default: float = 0.0) -> float:
-    try:
-        if x is None or isinstance(x, bool):
-            return default
-        return float(x)
-    except Exception:
-        return default
-
-
-def _as_int(x: Any, default: int = 0) -> int:
-    try:
-        if x is None or isinstance(x, bool):
-            return default
-        return int(x)
-    except Exception:
-        return default
-
-
-def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
-    if not isinstance(ts, str) or not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def _secs_since(ts: Optional[str]) -> Optional[float]:
-    dt = _parse_ts(ts)
-    if dt is None:
-        return None
-    return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
+# _read_state, _write_state -> kalshi_edge.telemetry.state_io
+# _as_int, _as_float -> kalshi_edge.util.coerce
+# _parse_ts, _secs_since -> kalshi_edge.util.time
 
 
 def _is_terminal(status: str) -> bool:
@@ -109,8 +72,8 @@ class V2Trader:
     def __init__(
         self,
         *,
-        http: HttpClient,
-        auth: KalshiAuth,
+        http: HttpClientLike,
+        auth: Optional[KalshiAuthLike],
         kalshi_base_url: str,
         state_file: str,
         trade_log_file: str = "trade_log.jsonl",
@@ -828,6 +791,7 @@ class V2Trader:
             source=str(cand.source),
             last_model_p=float(cand.p_yes),
             last_edge_pp=float(cand.edge_pp),
+            fee_cents_per_contract=int(cand.fee_cents),
         )
         oid = str(tracked.get("order_id"))
         self.open_orders[oid] = tracked
@@ -1024,7 +988,7 @@ class V2Trader:
         if self.dry_run:
             self.log.log("reconcile_skipped", {"event_ticker": event_ticker, "reason": "dry_run"})
             return
-        from kalshi_edge.kalshi_api import get_positions
+        from kalshi_edge.data.kalshi.client import get_positions
         cursor = None
         market_positions: List[dict] = []
         while True:
@@ -1078,6 +1042,38 @@ def debug_order_manager() -> None:
     """
     from dataclasses import dataclass
 
+    class _HttpNoop:
+        def get_json(self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None) -> Dict[str, Any]:
+            raise RuntimeError("debug_order_manager does not perform HTTP requests")
+
+        def post_json(self, url: str, json_body: Optional[dict] = None, headers: Optional[dict] = None) -> Dict[str, Any]:
+            raise RuntimeError("debug_order_manager does not perform HTTP requests")
+
+        def request_json(
+            self,
+            method: str,
+            url: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+            json_body: Optional[dict] = None,
+        ) -> Dict[str, Any]:
+            raise RuntimeError("debug_order_manager does not perform HTTP requests")
+
+    cfg = StrategyConfig(
+        ORDER_MODE="maker_only",
+        POST_ONLY=True,
+        MAX_CONTRACTS_PER_MARKET=2,
+        ALLOW_SCALE_IN=True,
+        P_REQUOTE_PP=0.02,
+        CANCEL_STALE_SECONDS=99999,
+        MAX_ENTRIES_PER_TICK=1,
+        FEE_CENTS=1,
+        MIN_EV=0.05,
+        MIN_TOP_SIZE=0.0,
+        SPREAD_MAX_CENTS=999,
+        paper=PaperConfig(simulate_maker_fills=False),
+    )
+
     @dataclass
     class _OB:
         ybid: int
@@ -1100,25 +1096,27 @@ def debug_order_manager() -> None:
     @dataclass
     class _MS:
         spot: float = 0.0
+        sigma_implied: float = 0.0
+        sigma_realized: float = 0.0
         sigma_blend: float = 0.0
+        confidence: str = "debug"
+        note: str = ""
+
+    @dataclass
+    class _Res:
+        event_ticker: str
+        minutes_left: float
+        market_state: _MS
+        rows: List[_Row]
 
     t = V2Trader(
-        http=HttpClient(debug=False),
-        auth=KalshiAuth(api_key_id="DUMMY", private_key_path="/dev/null"),
+        http=_HttpNoop(),
+        auth=None,
         kalshi_base_url="https://example.invalid",
         state_file=".debug_state_v22.json",
         trade_log_file="logs/debug_order_manager.jsonl",
         dry_run=True,
-        order_mode="maker_only",
-        post_only=True,
-        max_contracts_per_market=2,
-        allow_scale_in=True,
-        p_requote_pp=0.02,
-        cancel_stale_seconds=99999,
-        max_entries_per_tick=1,
-        fee_cents_maker=1,
-        fee_cents_taker=1,
-        ev_min=0.05,
+        config=cfg,
     )
 
     row1 = _Row(
@@ -1128,7 +1126,7 @@ def debug_order_manager() -> None:
         subtitle="debug",
         ob=_OB(ybid=50, nbid=50, ybuy=52, nbuy=52, spread_y=2, spread_n=2, yqty=10.0, nqty=10.0),
     )
-    res1 = EvaluationResult(event_ticker="TEST-EVT", event_title="debug", minutes_left=10.0, market_state=_MS(), rows=[row1])  # type: ignore[arg-type]
+    res1 = _Res(event_ticker="TEST-EVT", minutes_left=10.0, market_state=_MS(), rows=[row1])
     t.on_tick(res1)
     assert len(t.active_order_by_market) <= 1
     before = dict(t.active_order_by_market)
@@ -1161,7 +1159,7 @@ def debug_order_manager() -> None:
         subtitle="debug",
         ob=row1.ob,
     )
-    res2 = EvaluationResult(event_ticker="TEST-EVT", event_title="debug", minutes_left=10.0, market_state=_MS(), rows=[row2])  # type: ignore[arg-type]
+    res2 = _Res(event_ticker="TEST-EVT", minutes_left=10.0, market_state=_MS(), rows=[row2])
     t.on_tick(res2)
     assert len(t.active_order_by_market) <= 1
 

@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-settlement_pnl_from_log.py
+report/analyze.py
 
 Compute realized (hold-to-expiry) PnL for a kalshi_edge run JSONL by:
 - reading fills from the log
@@ -8,12 +7,8 @@ Compute realized (hold-to-expiry) PnL for a kalshi_edge run JSONL by:
 - fetching settlement outcomes from Kalshi (live or historical endpoints)
 - computing payout and PnL per fill, aggregated by market + event
 
-Refs:
-- GET /markets/{ticker} includes status/result/settlement_value/settlement_ts. (Kalshi docs)  :contentReference[oaicite:4]{index=4}
-- Historical fallback endpoints: /historical/markets/{ticker}. (Kalshi docs)  :contentReference[oaicite:5]{index=5}
-
 Usage:
-  python3 settlement_pnl_from_log.py run.jsonl --outdir out --cache markets_cache.json
+  python3 -m kalshi_edge.report.analyze run.jsonl --outdir out --cache markets_cache.json
 """
 
 from __future__ import annotations
@@ -28,9 +23,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+from kalshi_edge.constants import KALSHI
 
-BASE = "https://api.elections.kalshi.com/trade-api/v2"
+BASE = KALSHI
 
 
 def parse_ts(s: str) -> datetime:
@@ -47,8 +42,7 @@ class Fill:
     market_ticker: str
     fill_count: int
     fill_price_cents: int
-    # inferred
-    side: Optional[str] = None  # "yes" or "no"
+    side: Optional[str] = None
     fee_cents: int = 0
     submit_ts: Optional[datetime] = None
 
@@ -80,9 +74,7 @@ def write_csv(path: str, rows: List[Dict[str, Any]], fieldnames: List[str]) -> N
             w.writerow({k: r.get(k) for k in fieldnames})
 
 
-def fetch_market_any(ticker: str, session: requests.Session, timeout: int = 15) -> Dict[str, Any]:
-    # Try live first, then historical fallback if needed.
-    # Historical endpoints are required once data is beyond cutoff. :contentReference[oaicite:6]{index=6}
+def fetch_market_any(ticker: str, session: "requests.Session", timeout: int = 15) -> Dict[str, Any]:
     live_url = f"{BASE}/markets/{ticker}"
     hist_url = f"{BASE}/historical/markets/{ticker}"
 
@@ -101,18 +93,8 @@ def fetch_market_any(ticker: str, session: requests.Session, timeout: int = 15) 
 def infer_side_and_fee(
     records: List[Dict[str, Any]],
     fills: List[Fill],
-    max_lookback_s: float = 60 * 30,  # 30 minutes
+    max_lookback_s: float = 60 * 30,
 ) -> None:
-    """
-    In your log format:
-    - paper_fill has market_ticker, fill_price_cents, fill_count but not side
-    - order_submit has market_ticker, side, price_cents, count
-    - decision (action=submit) often has fee_cents
-
-    We match each fill to the most recent prior order_submit with same (market_ticker, price, count),
-    and then match a nearby decision for fee_cents.
-    """
-    # Index order_submits by market_ticker for speed
     submits_by_market: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     decisions_by_key: Dict[Tuple[str, str, int, int], List[Dict[str, Any]]] = defaultdict(list)
 
@@ -130,7 +112,6 @@ def infer_side_and_fee(
             if isinstance(mt, str) and side in ("yes", "no") and isinstance(price, int) and isinstance(count, int):
                 decisions_by_key[(mt, side, price, count)].append(r)
 
-    # Ensure time-sorted
     for mt in submits_by_market:
         submits_by_market[mt].sort(key=lambda x: x["_ts"])
     for k in decisions_by_key:
@@ -163,13 +144,11 @@ def infer_side_and_fee(
         f.submit_ts = best["_ts"]
         f.side = str(best.get("side", "")).lower() if best.get("side") else None
 
-        # fee inference (nearest decision at same key)
         if f.side in ("yes", "no"):
             key = (f.market_ticker, f.side, f.fill_price_cents, f.fill_count)
             cand = decisions_by_key.get(key, [])
             fee = 0
             if cand:
-                # choose closest decision time to submit_ts
                 tgt = f.submit_ts or f.fill_ts
                 chosen = min(cand, key=lambda d: abs((d["_ts"] - tgt).total_seconds()))
                 fc = chosen.get("fee_cents")
@@ -183,10 +162,8 @@ def payout_cents_for_side(result: str, side: str, settlement_value: Optional[int
     For binary markets:
       result == "yes" => YES pays 100, NO pays 0
       result == "no"  => NO pays 100, YES pays 0
-    Kalshi returns 'result' on GET /markets/{ticker}. :contentReference[oaicite:7]{index=7}
-
     For 'scalar' markets, use settlement_value if present.
-    For 'void', positions are generally returned at cost basis (fees unclear from public market data).
+    For 'void', positions are generally returned at cost basis.
     """
     result = (result or "").lower()
     side = (side or "").lower()
@@ -195,16 +172,19 @@ def payout_cents_for_side(result: str, side: str, settlement_value: Optional[int
         return 100 if result == side else 0
 
     if result == "scalar":
-        return settlement_value  # typically 0..100 cents
+        return settlement_value
 
     if result == "void":
-        return None  # handled upstream (refund logic depends on fees)
+        return None
 
     return None
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        prog="kalshi_edge.report.analyze",
+        description="Compute realized PnL from a kalshi_edge JSONL log.",
+    )
     ap.add_argument("jsonl_path")
     ap.add_argument("--outdir", default="pnl_out")
     ap.add_argument("--cache", default="markets_cache.json", help="Cache market fetches here")
@@ -214,7 +194,6 @@ def main() -> int:
 
     records = read_jsonl(args.jsonl_path)
 
-    # Extract fills
     fills: List[Fill] = []
     for r in records:
         if r.get("event") != "paper_fill":
@@ -233,16 +212,16 @@ def main() -> int:
 
     infer_side_and_fee(records, fills)
 
-    # Load cache
     cache_path = args.cache
     market_cache: Dict[str, Any] = {}
     if os.path.exists(cache_path):
         try:
-            market_cache = json.loads(open(cache_path, "r", encoding="utf-8").read())
+            with open(cache_path, "r", encoding="utf-8") as f:
+                market_cache = json.load(f)
         except Exception:
             market_cache = {}
 
-    # Fetch unique markets
+    import requests
     unique_markets = sorted({f.market_ticker for f in fills})
     sess = requests.Session()
 
@@ -261,11 +240,9 @@ def main() -> int:
                 print(f"[market] {tkr} ERROR: {e}")
         time.sleep(max(0.0, args.sleep_ms / 1000.0))
 
-    # Save cache
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(market_cache, f, indent=2, sort_keys=True)
 
-    # Compute PnL
     fill_rows: List[Dict[str, Any]] = []
     market_rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
     event_rows: Dict[str, Dict[str, Any]] = {}
@@ -293,9 +270,9 @@ def main() -> int:
         payout_cents = None
 
         is_settled = (
-        status in ("settled", "finalized")
-        or m.get("settlement_ts") is not None
-        or (m.get("result") or "").lower() in ("yes", "no", "scalar", "void")
+            status in ("settled", "finalized")
+            or m.get("settlement_ts") is not None
+            or (m.get("result") or "").lower() in ("yes", "no", "scalar", "void")
         )
 
         if side in ("yes", "no") and is_settled:
@@ -305,9 +282,7 @@ def main() -> int:
                 pnl_cents = payout_cents - cost_cents
                 pnl_usd = pnl_cents / 100.0
             else:
-                # void or unknown: best-effort handling
                 if result == "void":
-                    # Refund at cost basis is typical for void; fees may or may not be refunded (check Kalshi docs / account statement).
                     payout_cents = f.fill_price_cents * f.fill_count
                     pnl_cents = payout_cents - cost_cents
                     pnl_usd = pnl_cents / 100.0
@@ -339,7 +314,6 @@ def main() -> int:
             }
         )
 
-        # Aggregate by (market, side)
         key = (f.market_ticker, side)
         if key not in market_rows:
             market_rows[key] = {
@@ -359,7 +333,6 @@ def main() -> int:
             market_rows[key]["pnl_usd"] += pnl_usd
             market_rows[key]["settled_contracts"] += f.fill_count
 
-        # Aggregate by event
         if et not in event_rows:
             event_rows[et] = {"event_ticker": et, "contracts": 0, "cost_usd": 0.0, "pnl_usd": 0.0, "settled_contracts": 0}
         event_rows[et]["contracts"] += f.fill_count
@@ -368,27 +341,13 @@ def main() -> int:
             event_rows[et]["pnl_usd"] += pnl_usd
             event_rows[et]["settled_contracts"] += f.fill_count
 
-    # Output
     os.makedirs(args.outdir, exist_ok=True)
     write_csv(
         os.path.join(args.outdir, "fills_with_settlement.csv"),
         fill_rows,
-        [
-            "fill_ts",
-            "event_ticker",
-            "market_ticker",
-            "side",
-            "count",
-            "fill_price_cents",
-            "fee_cents",
-            "cost_usd",
-            "market_status",
-            "market_result",
-            "settlement_value",
-            "settlement_ts",
-            "payout_cents_total",
-            "pnl_usd",
-        ],
+        ["fill_ts", "event_ticker", "market_ticker", "side", "count", "fill_price_cents",
+         "fee_cents", "cost_usd", "market_status", "market_result", "settlement_value",
+         "settlement_ts", "payout_cents_total", "pnl_usd"],
     )
 
     market_summary = list(market_rows.values())

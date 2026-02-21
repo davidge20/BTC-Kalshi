@@ -6,10 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from kalshi_edge.trade_log_schema import EVENT_SCHEMAS, LOG_SCHEMA_VERSION
-
-
-def utc_ts() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from kalshi_edge.util.time import utc_ts  # canonical source
 
 
 class TradeLogger:

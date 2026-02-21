@@ -1,15 +1,10 @@
 """
-pipeline.py
+pipeline.py — high-level orchestration called by run.py.
 
-High-level "glue" that run.py calls.
+Coordinates: fetch event -> extract ladder -> compute MarketState -> evaluate ladder.
 
-This is the only place where we coordinate:
-- fetch event
-- extract ladder
-- compute market state
-- evaluate ladder
-
-Keeping glue in one place prevents circular imports.
+Keeping this glue in one place prevents circular imports between data-fetching,
+model, and evaluation modules.
 """
 
 from __future__ import annotations
@@ -17,7 +12,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from kalshi_edge.http_client import HttpClient
-from kalshi_edge.kalshi_api import get_event, above_markets_from_event, event_ticker_from_url
+from kalshi_edge.data.kalshi.client import get_event
+from kalshi_edge.data.kalshi.models import above_markets_from_event, event_ticker_from_url
 from kalshi_edge.market_state import build_market_state, MarketState
 from kalshi_edge.ladder_eval import evaluate_ladder, LadderRow
 

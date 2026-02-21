@@ -1,15 +1,15 @@
 """
-market_state.py
+market_state.py — build MarketState from external BTC venues.
 
-@brief 
-Build MarketState:
-- spot price (Deribit index)
-- implied volatility estimate (Deribit options, near ATM)
-- realized short-term volatility (Coinbase 1-min candles)
-- blend implied & realized into sigma_blend
-- compute "confidence" label and expected 1-sigma move over time left
+Gathers:
+- Spot price (Deribit index)
+- Implied volatility estimate (Deribit options, near ATM)
+- Realized short-term volatility (Coinbase 1-min candles)
+- Blended vol (implied + realized) -> sigma_blend
+- Confidence label and expected 1-sigma move over time remaining
 
-This module is intentionally independent from Kalshi.
+This module is intentionally independent from Kalshi — it only talks to
+Deribit and Coinbase to build inputs for the probability model.
 """
 
 from __future__ import annotations
@@ -21,13 +21,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from kalshi_edge.constants import DERIBIT, COINBASE, MINUTES_PER_YEAR
-from kalshi_edge.formatting import fmt_money
 from kalshi_edge.http_client import HttpClient
 from kalshi_edge.math_models import expected_one_sigma_move_pct
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+from kalshi_edge.util.time import utc_now  # canonical source
 
 
 @dataclass

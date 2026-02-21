@@ -1,11 +1,11 @@
 """
-order_manager.py
+order_manager.py — single-order lifecycle manager.
 
-Lightweight helper for maintaining *at most one* active order per (market_ticker, side).
-It handles:
-- create / amend / cancel
-- periodic refresh via get_order()
-- incremental fill deltas (count + cost + fee deltas)
+Maintains at most one active order per (market_ticker, side). Handles
+create / amend / cancel, periodic refresh via get_order(), and incremental
+fill-delta tracking.
+
+API calls are made through functions in data.kalshi.client.
 """
 
 from __future__ import annotations
@@ -15,35 +15,21 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from kalshi_edge.fill_delta import FillDelta
-from kalshi_edge.http_client import HttpClient
-from kalshi_edge.kalshi_api import amend_order, cancel_order, create_order, get_order
+from kalshi_edge.data.kalshi.client import HttpClientLike, amend_order, cancel_order, create_order, get_order
 from kalshi_edge.trade_log import TradeLogger
-
-
-def utc_ts() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from kalshi_edge.util.coerce import as_int as _as_int
+from kalshi_edge.util.time import utc_ts
 
 
 def market_side_key(market_ticker: str, side: str) -> str:
     return f"{market_ticker}|{side}"
 
 
-def _as_int(x: Any, default: int = 0) -> int:
-    try:
-        if x is None:
-            return default
-        if isinstance(x, bool):
-            return default
-        return int(x)
-    except Exception:
-        return default
-
-
 class OrderManager:
     def __init__(
         self,
         *,
-        http: HttpClient,
+        http: HttpClientLike,
         auth,
         kalshi_base_url: str,
         log: TradeLogger,
@@ -205,6 +191,7 @@ class OrderManager:
         source: str,
         last_model_p: float,
         last_edge_pp: float,
+        fee_cents_per_contract: Optional[int] = None,
         extra_payload: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
@@ -249,6 +236,9 @@ class OrderManager:
             )
             tracked["fill_count"] = int(count)
             tracked["remaining_count"] = 0
+            tracked["last_fill_cost_cents"] = int(count) * int(price_cents)
+            fc = int(fee_cents_per_contract) if fee_cents_per_contract is not None else 0
+            tracked["last_fee_paid_cents"] = int(count) * int(fc)
             return tracked, {"order": tracked}
 
         if self.dry_run and source == "maker":

@@ -1,5 +1,5 @@
 """
-trader_v0.py
+trader_v0.py  [DEPRECATED — use trader_v2_engine.V2Trader]
 
 V0 trading loop:
   - Evaluate the current KXBTCD ABOVE ladder
@@ -15,14 +15,22 @@ from __future__ import annotations
 import json
 import os
 import uuid
+import warnings
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple
 
+warnings.warn(
+    "trader_v0 is deprecated; use kalshi_edge.trader_v2_engine.V2Trader instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from kalshi_edge.kalshi_auth import KalshiAuth
 from kalshi_edge.http_client import HttpClient
-from kalshi_edge.kalshi_api import create_order, get_positions
+from kalshi_edge.data.kalshi.client import create_order, get_positions
 from kalshi_edge.pipeline import EvaluationResult
+from kalshi_edge.telemetry.state_io import read_state as _read_state, write_state as _write_state
 
 
 @dataclass
@@ -111,21 +119,7 @@ def pick_best_candidate(
     return best
 
 
-def _read_state(path: str) -> Dict[str, Any]:
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
-
-
-def _write_state(path: str, data: Dict[str, Any]) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, sort_keys=True)
-    os.replace(tmp, path)
+# _read_state, _write_state -> kalshi_edge.telemetry.state_io
 
 
 def _filled_contracts_from_state(st: Dict[str, Any]) -> int:

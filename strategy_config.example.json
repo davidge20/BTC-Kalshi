@@ -19,15 +19,13 @@
   "ORDER_REFRESH_SECONDS": 10,
   "CANCEL_STALE_SECONDS": 60,
   "P_REQUOTE_PP": 0.02,
-  "paper": {
-    "simulate_maker_fills": true,
-    "tick_seconds": 1,
-    "min_top_time_seconds": 3,
-    "fill_prob_per_tick": 0.15,
-    "partial_fill": true,
-    "max_fill_per_tick": 1,
-    "slippage_cents": 0,
-    "seed": 12345
-  }
-}
-
+  "REFRESH_SECONDS": 10,
+  "WINDOW_MINUTES": 70,
+  "BAND_PCT": 25.0,
+  "SORT_MODE": "ev",
+  "DEPTH_WINDOW_CENTS": 2,
+  "THREADS": 10,
+  "IV_BAND_PCT": 3.0,
+  "MIN_MINUTES_LEFT": 2.0,
+  "LOCK_EVENT": true,
+  "LOG_SET

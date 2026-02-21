@@ -1,18 +1,12 @@
 """
-trader_v1.py
+trader_v1.py  [DEPRECATED — use trader_v2_engine.V2Trader]
 
-V1 trader (Option 2: capture a fraction of the initial edge)
+Legacy V1 trader. Migrate to V2Trader (trader_v2_engine.py) for new work.
 
 - Entry: choose best market/side by positive edge in probability points (pp)
 - Exit: take-profit / stop-loss based on capturing a fraction of the entry edge
-        + time-stop
-        + optional "edge flip" (model says selling now is better)
-
-Includes reconcile_state() (copied/adapted from V0).
-
-Adds:
-- JSONL trade logging (entries, exits, shutdown PnL snapshot)
-- on_shutdown(last_result) to be called by run.py on Ctrl-C
+        + time-stop + optional "edge flip"
+- State I/O via telemetry.state_io (shared with other engines)
 """
 
 from __future__ import annotations
@@ -20,48 +14,36 @@ from __future__ import annotations
 import json
 import os
 import uuid
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+warnings.warn(
+    "trader_v1 is deprecated; use kalshi_edge.trader_v2_engine.V2Trader instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from kalshi_edge.http_client import HttpClient
 from kalshi_edge.kalshi_auth import KalshiAuth
-from kalshi_edge.kalshi_api import (
+from kalshi_edge.data.kalshi.client import (
     create_order,
     get_positions,
     get_orderbook,
     get_event,
-    above_markets_from_event,
 )
+from kalshi_edge.data.kalshi.models import above_markets_from_event
 from kalshi_edge.ladder_eval import parse_orderbook_stats
 from kalshi_edge.math_models import clamp01, lognormal_prob_above
 from kalshi_edge.pipeline import EvaluationResult
 from kalshi_edge.trade_log import TradeLogger
+from kalshi_edge.telemetry.state_io import read_state as _read_state, write_state as _write_state
+from kalshi_edge.util.time import utc_ts as _utc_ts
 
 
-# --------------------
-# state helpers
-# --------------------
-
-def _read_state(path: str) -> Dict[str, Any]:
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
-
-
-def _write_state(path: str, data: Dict[str, Any]) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, sort_keys=True)
-    os.replace(tmp, path)
-
-
-def _utc_ts() -> str:
-    return datetime.now(timezone.utc).isoformat()
+# _read_state, _write_state -> kalshi_edge.telemetry.state_io
+# _utc_ts -> kalshi_edge.util.time
 
 
 def _is_filled(resp: Dict[str, Any], want_count: int) -> bool:

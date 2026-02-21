@@ -17,8 +17,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set, Tuple
 
 from kalshi_edge.http_client import HttpClient
-from kalshi_edge.kalshi_api import get_event
-from kalshi_edge.trade_log import TradeLogger, utc_ts
+from kalshi_edge.data.kalshi.client import get_event
+from kalshi_edge.trade_log import TradeLogger
+from kalshi_edge.util.time import utc_ts
 
 
 def _read_json(path: str) -> Dict[str, Any]:

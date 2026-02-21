@@ -17,8 +17,8 @@ from datetime import datetime
 from typing import List, Optional
 
 from kalshi_edge.constants import KALSHI
-from kalshi_edge.formatting import parse_iso8601, utc_now
 from kalshi_edge.http_client import HttpClient
+from kalshi_edge.util.time import parse_iso8601, utc_now
 
 
 @dataclass
