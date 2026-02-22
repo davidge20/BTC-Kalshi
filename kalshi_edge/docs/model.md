@@ -1,288 +1,161 @@
-# Probability Model
+## Probability + EV model (`p_model`, `sigma_blend`, `edge_pp`)
 
-## Executive Summary
+### Executive summary
 
-We estimate a short-horizon threshold probability
-$
-p_{\text{model}}=\mathbb{P}(S_T \ge K)
-$
-using a driftless lognormal baseline with an annualized volatility input $\sigma$ and time-to-close $t$. In practice we set $\sigma=\sigma_{\text{blend}}$, a simple blend of a near-ATM implied-volatility estimate (Deribit options) and a short-window realized-volatility estimate (Coinbase 1-minute candles). We use $p_{\text{model}}$ as an interpretable probability proxy for research-style EV ranking and diagnostics.
+- The core modeled quantity is a short-horizon threshold probability:
+  \[
+  p_{\text{model}}=\mathbb{P}(S_T \ge K)
+  \]
+  where \(S_T\) is BTC spot at Kalshi close and \(K\) is the ladder strike.
+- We use a **driftless lognormal** baseline (fast + auditable) with time-to-close and an annualized volatility input \(\sigma\).
+- In live evaluation, \(\sigma\) is `sigma_blend`: a simple **blend** of:
+  - Deribit near-ATM implied vol, and
+  - Coinbase 1-minute realized vol over ~1 hour.
+- EV is **buy-only** and **per contract**, net of a simplified flat fee `FEE_CENTS`.
+- The trader’s `edge_pp` is this net EV in dollars/contract (numerically equal to “probability points” because payoff is \$1).
 
+### Definitions (units match the code)
 
-## Modeling Context: Lognormal Baseline and Brownian Motion
+- \(S_0\): underlying spot now (USD)
+- \(K\): strike (USD)
+- `minutes_left`: time to Kalshi close (minutes)
+- \(t\): time to close (years)
+- \(\sigma\): annualized volatility (decimal, e.g. 0.85 = 85%)
+- `p_model`: modeled probability \(\mathbb{P}(S_T \ge K)\)
 
-We use a tractable short-horizon model for $\mathbb{P}(S_T \ge K)$ that is easy to audit and connect to observable volatility inputs. A standard starting point in mathematical finance is geometric Brownian motion (GBM) for the asset price $S_t$:
+Time conversion uses `kalshi_edge/constants.py::MINUTES_PER_YEAR`:
 
-$$
-dS_t = \mu S_t\,dt + \sigma S_t\,dW_t.
-$$
+\[
+t = \frac{\texttt{minutes\_left}}{\texttt{MINUTES\_PER\_YEAR}}
+\qquad
+\texttt{MINUTES\_PER\_YEAR}=365\cdot 24\cdot 60=525{,}600
+\]
 
-where $W_t$ is a standard Brownian motion, $\mu$ is a drift parameter, and $\sigma$ is the (annualized) volatility parameter. Applying Itô’s lemma gives the corresponding log-price dynamics:
-
-$$
-d(\ln S_t) = \left(\mu - \tfrac12\sigma^2\right)dt + \sigma\,dW_t.
-$$
-
-Under constant $\sigma$, this implies that the terminal log return is normally distributed:
-
-$$
-\ln\!\left(\frac{S_T}{S_0}\right) \sim \mathcal{N}\!\left(\left(\mu - \tfrac12\sigma^2\right)t,\ \sigma^2 t\right).
-$$
-
-### What the Implementation Assumes
-
-The implementation uses a simplified “driftless” lognormal baseline:
-
-$$
-\ln\!\left(\frac{S_T}{S_0}\right) \sim \mathcal{N}(0,\sigma^2 t).
-$$
-
-Intuitively, for horizons on the order of minutes to hours, the drift contribution is typically small relative to the diffusion scale $\sigma\sqrt{t}$. This choice also keeps the mapping from $\sigma$ to threshold probabilities transparent, which is useful for a research tool whose main objective is ranking and diagnosing edge rather than producing a fully specified no-arbitrage valuation.
-
-### A Note on Measure Choice
-
-In a textbook derivative-pricing setting, one often works under a risk-neutral measure and would replace $\mu$ with $r-q$ (risk-free rate minus dividend or convenience yield) in the GBM drift. We do not attempt to enforce a single consistent measure: we blend an implied-volatility signal (options-implied, largely risk-neutral information) with a realized-volatility signal (historical, physical-measure information). The result should be read as a pragmatic short-horizon probability proxy.
-
-## Key Assumptions
-
-For clarity, the model used in this repo makes the following simplifying assumptions:
-
-- **Lognormal diffusion baseline**: $\ln(S_T/S_0)$ is modeled as Normal over the horizon.
-- **Zero drift over the horizon**: the mean log return is set to $0$.
-- **Constant volatility parameter**: $\sigma$ is treated as a single annualized number used throughout the horizon.
-- **Single-parameter implied-vol summary**: we summarize near-ATM option IVs using a median within a strike band around spot.
-- **Research proxy, not a calibrated pricing model**: outputs are used for ranking/diagnostics rather than no-arbitrage valuation.
-
-## Units and Notation
-
-- $S_0$: current BTC spot price in USD (`kalshi_edge/market_state.py::deribit_index_price`)
-- $K$: ladder strike in USD (`kalshi_edge/kalshi_api.py::market_strike_from_floor`)
-- `minutes_left`: time-to-close in **minutes** (`kalshi_edge/kalshi_api.py::above_markets_from_event`)
-- $t$: time-to-close in **years**
-- $\sigma$: annualized volatility in **decimal** units (e.g. $0.85$ means $85\%$ annualized)
-
-The constant `MINUTES_PER_YEAR` is defined in `kalshi_edge/constants.py`.
-
-## Win Probability: Lognormal Baseline
+### Baseline model: driftless lognormal
 
 Implemented in `kalshi_edge/math_models.py::lognormal_prob_above`.
 
-The modeled probability is:
+Assumption:
 
-$$
-p_{\text{model}} = \mathbb{P}(S_T \ge K)
-$$
-
-### Distributional Assumption
-
-The code assumes a driftless lognormal model for short-horizon returns:
-
-$$
-\ln\!\left(\frac{S_T}{S_0}\right)\sim \mathcal{N}(0,\sigma^2 t)
-$$
-
-where time-to-close in years is:
-
-$$
-t = \frac{\texttt{minutes\_left}}{\texttt{MINUTES\_PER\_YEAR}}
-$$
-
-### Reducing the Event to a Normal Tail Probability
-
-Start by rewriting the threshold event in log space:
-
-$$
-\mathbb{P}(S_T \ge K)
-= \mathbb{P}\!\left(\ln S_T \ge \ln K\right)
-= \mathbb{P}\!\left(\ln\!\left(\frac{S_T}{S_0}\right) \ge \ln\!\left(\frac{K}{S_0}\right)\right).
-$$
-
-Let
-
-$$
-X = \ln\!\left(\frac{S_T}{S_0}\right).
-$$
-
-Under the assumption above, $X \sim \mathcal{N}(0,\sigma^2 t)$. Standardize to a unit Normal by dividing by its standard deviation:
-
-$$
-Z = \frac{X}{\sigma\sqrt{t}} \sim \mathcal{N}(0,1).
-$$
-
-The strike threshold becomes the standardized value
-
-$$
-z = \frac{\ln(K/S_0)}{\sigma\sqrt{t}}.
-$$
-
-This is the origin of the $z$ used in the implementation: it is log-moneyness $\ln(K/S_0)$ expressed in units of the model’s one-standard-deviation move over horizon $t$. Here, **log-moneyness** is a log-scale measure of how far the strike $K$ is from the current spot $S_0$: it is positive when $K>S_0$, negative when $K<S_0$, and zero when $K=S_0$. We use the log ratio because the model is specified in terms of log returns, $\ln(S_T/S_0)$, so the strike comparison naturally becomes a threshold in log space, $\ln(K/S_0)$.
-
-### Closed Form for $p_{\text{model}}$
-
-Using the standardized variable $Z$, we have:
-
-$$
-p_{\text{model}}
-= \mathbb{P}(X \ge \ln(K/S_0))
-= \mathbb{P}\!\left(Z \ge z\right).
-$$
-
-Let $\Phi(\cdot)$ denote the standard normal CDF. Then:
-
-$$
-\mathbb{P}(Z \ge z) = 1 - \Phi(z),
-$$
-
-which yields the implemented closed form:
-
-$$
-p_{\text{model}} = \operatorname{clamp}_{[0,1]}\!\Bigl(1 - \Phi(z)\Bigr)
-$$
-
-where:
-- $\Phi(\cdot)$ is the standard normal CDF implemented in `kalshi_edge/math_models.py::norm_cdf` using `erf`.
-- `clamp01` is `kalshi_edge/math_models.py::clamp01`.
-
-Edge cases in code:
-- if `minutes_left <= 0`, it returns $1$ if $S_0 \ge K$ else $0$
-- if $S_0 \le 0$ or $K \le 0$, it returns $0$
-- if $\sigma\sqrt{t} \le 0$, it returns the same deterministic comparison result
-
-## Volatility Inputs and Sigma Blend
-
-All volatility sourcing and blending is implemented in `kalshi_edge/market_state.py::build_market_state`.
-
-### Implied Volatility: Deribit
-
-Implied vol comes from `kalshi_edge/market_state.py::deribit_atm_implied_vol`:
-
-- Pull option summaries from Deribit.
-- Filter option strikes within a band around spot.
-
-The objective is to estimate a single **near-at-the-money (near-ATM) implied volatility level** using many option quotes whose strikes lie close to the current spot price. Rather than relying on a single strike (which may be illiquid, missing, or noisy), we:
-
-- collect a *set* of option-implied volatilities from strikes near spot, and
-- take a robust summary statistic (the median).
-
-Concretely, we define a symmetric strike window around $S_0$:
-
-$$
-\text{lo} = S_0\left(1 - \frac{\texttt{iv\_band\_pct}}{100}\right)
-\qquad
-\text{hi} = S_0\left(1 + \frac{\texttt{iv\_band\_pct}}{100}\right)
-$$
-
-These bounds are exactly the “$\pm$ band” around spot. For example, if $\texttt{iv\_band\_pct}=3$, then we keep strikes in $[0.97S_0,\,1.03S_0]$.
-
-In code, $\text{lo}$ and $\text{hi}$ are used to keep only option rows whose strike $K_{\text{opt}}$ satisfies:
-
-$$
-\text{lo} \le K_{\text{opt}} \le \text{hi}.
-$$
-
-This “near-ATM” restriction is primarily about stability:
-- Near-ATM options tend to have more reliable quoted IVs than deep OTM options.
-- We evaluate ladder probabilities for strikes near spot (by default), so an ATM-ish vol is a reasonable single-parameter summary.
-
-After filtering to near-ATM options, the implementation:
-
-- Groups the remaining option rows by expiry.
-- Selects the *nearest* expiry with at least 4 usable IV samples (otherwise it falls back to the nearest expiry available).
-- Computes $\sigma_{\text{implied}}$ as the **median** of the `mark_iv` values for that expiry (restricted to strikes in $[\text{lo},\text{hi}]$).
-
-These choices are meant to be stable and explainable:
-- **Strike band (`iv_band_pct`)** controls how “ATM-like” the sample set is. A narrower band reduces smile/skew contamination but may yield fewer quotes.
-- **Minimum samples (4)** is a small safeguard against using a single stale print.
-- **Median aggregation** reduces sensitivity to outliers among the retained quotes.
-
-Deribit’s `mark_iv` normalization is in `kalshi_edge/market_state.py::normalize_mark_iv`:
-
-$$
-\texttt{mark\_iv\_decimal} = \frac{v}{100}
-$$
-
-### Realized Volatility: Coinbase
-
-Realized vol is computed in `kalshi_edge/market_state.py::coinbase_realized_vol_1h`:
-
-- Pull 1-minute candles and take the last $N$ closes.
-- Compute 1-minute log returns:
-
-$$
-r_i = \ln\!\left(\frac{C_i}{C_{i-1}}\right)
-$$
-
-- Compute population standard deviation $\sigma_{\text{1m}} = \operatorname{pstdev}(\{r_i\})$.
-- Annualize:
-
-$$
-\sigma_{\text{realized}} = \sigma_{\text{1m}}\sqrt{\texttt{MINUTES\_PER\_YEAR}}
-$$
-
-Realized volatility here is a deliberately **local, short-window** estimate (roughly “last hour”). The intended use is not to estimate long-run volatility, but to capture regime changes (e.g. a sudden spike) that may not yet be reflected in a single implied-vol snapshot.
-
-### Blend Rule
-
-The blend rule is in `kalshi_edge/market_state.py::blend_vol`. Let:
-
-$$
-\rho = \frac{\sigma_{\text{realized}}}{\sigma_{\text{implied}}}
-$$
+\[
+\ln\left(\frac{S_T}{S_0}\right)\sim\mathcal{N}(0,\sigma^2 t)
+\]
 
 Then:
 
-$$
-\sigma_{\text{blend}} =
-\begin{cases}
-0.5\,\sigma_{\text{implied}} + 0.5\,\sigma_{\text{realized}} & \text{if } \rho > 1.5 \\
-0.7\,\sigma_{\text{implied}} + 0.3\,\sigma_{\text{realized}} & \text{otherwise}
-\end{cases}
-$$
+\[
+p_{\text{model}}
+=\mathbb{P}(S_T \ge K)
+=1-\Phi\!\left(\frac{\ln(K/S_0)}{\sigma\sqrt{t}}\right)
+=\Phi(d_2)
+\]
 
-If $\sigma_{\text{implied}} \le 0$, code falls back to $\sigma_{\text{blend}}=\sigma_{\text{realized}}$.
+with:
 
-### Why Blend Implied and Realized Volatility
+\[
+d_2 = \frac{\ln(S_0/K)}{\sigma\sqrt{t}}
+\]
 
-We blend implied and realized volatility because each input captures different information and each has failure modes:
+\(\Phi(\cdot)\) is the standard normal CDF (implemented via `erf`).
 
-- **Implied volatility** is forward-looking in the sense that it is inferred from option prices. It tends to incorporate market expectations (and risk premia) about future variance over the option’s horizon. In practice, it can also be distorted by:
-  - supply/demand imbalances in options,
-  - volatility risk premia,
-  - microstructure noise in individual quotes (especially away from the most liquid expiries/strikes).
+### Volatility input: live `sigma_blend` vs backtest approximation
 
-- **Realized volatility** is purely backward-looking: it measures the variability of observed returns over a recent window. It can respond quickly to new regimes, but it is:
-  - noisy over short windows,
-  - sensitive to window choice,
-  - not a direct forecast of future variance.
+#### Live evaluation (`sigma_blend`)
 
-Using only one is therefore brittle:
-- implied-only can under-react to sudden realized regime shifts (or reflect option-market distortions),
-- realized-only can overfit recent noise and ignore forward-looking information embedded in options.
+Built in `kalshi_edge/market_state.py::build_market_state`:
 
-The blend rule is a simple robustness heuristic: when realized volatility is much larger than implied volatility (large $\rho$), the code increases weight on realized volatility (50/50). Otherwise it defaults to weighting implied volatility more heavily (70/30). This reflects the intuition that implied vol is usually a better “baseline” forecast, but realized vol is informative when it strongly disagrees.
+- **Spot**: Deribit index (`deribit_index_price`)
+- **Implied vol** (\(\sigma_{\text{implied}}\)): Deribit options, near-ATM median within a strike band controlled by `strategy.IV_BAND_PCT`
+- **Realized vol** (\(\sigma_{\text{realized}}\)): Coinbase BTC-USD 1-minute candles (last 61 closes), annualized by \(\sqrt{\texttt{MINUTES\_PER\_YEAR}}\)
+- **Blend rule** (`blend_vol`):
+  - if \(\sigma_{\text{implied}}\le 0\): use realized
+  - if \(\sigma_{\text{realized}}/\sigma_{\text{implied}} > 1.5\): 50/50
+  - else: 70/30 (implied/realized)
 
-### Practical Caveats
+#### Backtests (realized-only)
 
-The two volatility inputs are not measured on identical horizons:
-- the implied-vol estimate is taken from the nearest option expiry that provides enough near-ATM samples (often days),
-- the realized-vol estimate is computed from a short recent window (about one hour),
-- the Kalshi horizon $t$ can be much shorter than either.
+The minute-cadence backtest (`kalshi_edge/backtest_engine.py`) uses **Coinbase realized vol only** at each minute. There is no Deribit IV term in the backtest harness today, so backtest `sigma` should be read as a practical approximation for fast iteration.
 
-The implementation treats both inputs as noisy proxies for an “instantaneous” volatility level and uses the blend for stability rather than theoretical consistency. If you want a horizon-matched model, you would typically use term structure (implied variance by maturity) and/or a realized-vol estimator aligned to the same horizon as $t$.
+### Mapping probability to trade decision (YES/NO in cents, fees, EV)
 
-## Model Limitations
+#### Kalshi price conventions
 
-The lognormal baseline is intentionally simple. In practice, BTC returns can exhibit jumps, heavy tails, volatility clustering, and volatility skew/smile. As a result, the Normal-tail probability $1-\Phi(z)$ can be systematically miscalibrated, especially in stressed regimes or when the relevant horizon is very short. We treat this model as a fast, auditable baseline; we rely on conservative execution assumptions and diagnostics elsewhere in the pipeline to reduce the risk of over-interpreting small probability differences.
+- A binary contract settles to **\$1** if it wins and **\$0** otherwise.
+- Prices are integer **cents** in \([0,100]\). Convert cents \(\to\) dollars by dividing by 100.
 
-## Derived One-Sigma Move
+#### Executable entry price used by the live evaluator
 
-This quantity is a scale/intuition diagnostic: it summarizes the model-implied “typical” move over the remaining time horizon given $\sigma_{\text{blend}}$. We display it in the CLI summary, but it is not directly used in the $p_{\text{model}}$ or EV calculations.
+Kalshi orderbooks can have missing/stale asks. In live evaluation, we use a reciprocal-bid “buy-now proxy” from `kalshi_edge/ladder_eval.py::parse_orderbook_stats`:
 
-Computed in `kalshi_edge/math_models.py::expected_one_sigma_move_pct`:
+\[
+\texttt{Ybuy} = 100 - \texttt{Nbid}
+\qquad
+\texttt{Nbuy} = 100 - \texttt{Ybid}
+\]
 
-$$
-\texttt{one\_sigma\_move\_pct} = \sigma_{\text{blend}}\sqrt{t}\cdot 100
-$$
+These proxy cents are what EV is computed against in the ladder table.
 
-Units:
-- `one_sigma_move_pct` is in **percent** (%).
+#### Fee treatment (as implemented)
+
+The current code uses a flat per-contract fee `FEE_CENTS` (integer cents). EV and trader decisions treat the all-in entry cost as:
+
+\[
+\text{entry\_cost} = \frac{\text{price\_cents} + \texttt{FEE\_CENTS}}{100}
+\]
+
+#### EV formulas (buy-only, dollars per contract)
+
+Let \(p_{\text{win}}\) be the side-specific win probability:
+
+- YES: \(p_{\text{win}} = p_{\text{model}}\)
+- NO: \(p_{\text{win}} = 1-p_{\text{model}}\)
+
+Then, with an executable price \(c\) in cents:
+
+\[
+\mathrm{EV} = p_{\text{win}} - \frac{c + \texttt{FEE\_CENTS}}{100}
+\]
+
+Live evaluator uses \(c=\texttt{Ybuy}\) for YES and \(c=\texttt{Nbuy}\) for NO.
+
+#### `edge_pp`
+
+In the trading engine, `edge_pp` is this same net EV (dollars/contract). Because payoff is \$1, **EV in dollars equals probability points** on \([0,1]\) (e.g. \(0.03\) dollars \(\approx\) 3pp).
+
+### Entry logic summary (high level)
+
+The trader (`kalshi_edge/trader_v2_engine.py`) builds YES/NO candidates per strike and applies:
+
+- **Minimum EV threshold**:
+  - new entries require `edge_pp >= strategy.MIN_EV`
+  - scale-ins (if enabled) require `edge_pp >= strategy.SCALE_IN_MIN_EV`
+- **Liquidity gates**:
+  - `strategy.SPREAD_MAX_CENTS` (skip wide spreads)
+  - `strategy.MIN_TOP_SIZE` (skip thin top-of-book)
+- **Caps**:
+  - `MAX_COST_PER_EVENT`, `MAX_COST_PER_MARKET`
+  - `MAX_POSITIONS_PER_EVENT`, `MAX_CONTRACTS_PER_MARKET`
+  - `MAX_ENTRIES_PER_TICK` and `ORDER_SIZE`
+- **Dedupe / scale-in semantics**:
+  - `DEDUPE_MARKETS=true` enforces one entry per market (and disables scaling)
+  - `ALLOW_SCALE_IN`, `SCALE_IN_COOLDOWN_SECONDS` control additional entries
+- **Order mode** (`strategy.ORDER_MODE`):
+  - `taker_only`: submit fill-or-kill at the “ask proxy”
+  - `maker_only`: place/refresh a resting bid (optionally `POST_ONLY`)
+  - `hybrid`: choose the better of the two per candidate
+
+### Why this could work (and why it could fail)
+
+#### Could work
+
+- Kalshi ladder quotes can be thin/stale and may lag a probability implied by deeper BTC markets.
+- When liquidity is poor, cross-venue convergence can be slow, creating temporary EV-ranked opportunities.
+
+#### Could fail
+
+- **Model miscalibration**: jump risk, tails, skew, and ultra-short-horizon effects can break the lognormal approximation.
+- **Vol mismatch**: \(\sigma_{\text{blend}}\) mixes horizons (option expiries vs 1h realized) and is a heuristic.
+- **Adverse selection**: you may only get filled when the market has moved against your model.
+- **Fees + microstructure**: flat fee + proxy execution are approximations; small edges can disappear in practice.
+- **Thin exits**: settlement is guaranteed; exits before settlement may not be (and are not the focus of the current engine).
+

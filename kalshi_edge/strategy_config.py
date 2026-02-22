@@ -1,47 +1,66 @@
 """
 strategy_config.py
 
-Strategy parameters loader (Workflow B): keep all tunables in a single JSON file
-selected via an environment variable.
+Workflow B config loader: keep live-strategy and backtest tunables in one JSON
+selected via `KALSHI_EDGE_CONFIG_JSON`.
 
 Usage:
 
     export KALSHI_EDGE_CONFIG_JSON=/path/to/config.json
     python3 -m kalshi_edge.run --watch
+    python3 -m kalshi_edge.backtest
 
-Example JSON:
+Preferred two-section JSON:
 
 {
-  "MIN_EV": 0.05,
-  "ORDER_SIZE": 1,
-  "MAX_COST_PER_EVENT": 5.0,
-  "MAX_POSITIONS_PER_EVENT": 10,
-  "MAX_COST_PER_MARKET": 1.0,
-  "MAX_CONTRACTS_PER_MARKET": 2,
-  "MIN_TOP_SIZE": 1.0,
-  "SPREAD_MAX_CENTS": 30,
-  "DEDUPE_MARKETS": false,
-  "ALLOW_SCALE_IN": true,
-  "SCALE_IN_COOLDOWN_SECONDS": 120,
-  "SCALE_IN_MIN_EV": 0.06,
-  "MAX_ENTRIES_PER_TICK": 1,
-  "FEE_CENTS": 1,
-  "ORDER_MODE": "taker_only",
-  "POST_ONLY": true,
-  "ORDER_REFRESH_SECONDS": 10,
-  "CANCEL_STALE_SECONDS": 60,
-  "P_REQUOTE_PP": 0.02,
-  "paper": {
-    "simulate_maker_fills": false,
-    "tick_seconds": 1,
-    "min_top_time_seconds": 3,
-    "fill_prob_per_tick": 0.15,
-    "partial_fill": true,
-    "max_fill_per_tick": 1,
-    "slippage_cents": 0,
-    "seed": 12345
+  "strategy": {
+    "MIN_EV": 0.05,
+    "ORDER_SIZE": 1,
+    "MAX_COST_PER_EVENT": 5.0,
+    "MAX_POSITIONS_PER_EVENT": 10,
+    "MAX_COST_PER_MARKET": 1.0,
+    "MAX_CONTRACTS_PER_MARKET": 2,
+    "MIN_TOP_SIZE": 1.0,
+    "SPREAD_MAX_CENTS": 30,
+    "DEDUPE_MARKETS": false,
+    "ALLOW_SCALE_IN": true,
+    "SCALE_IN_COOLDOWN_SECONDS": 120,
+    "SCALE_IN_MIN_EV": 0.06,
+    "MAX_ENTRIES_PER_TICK": 1,
+    "FEE_CENTS": 1,
+    "ORDER_MODE": "taker_only",
+    "POST_ONLY": true,
+    "ORDER_REFRESH_SECONDS": 10,
+    "CANCEL_STALE_SECONDS": 60,
+    "P_REQUOTE_PP": 0.02,
+    "paper": {
+      "simulate_maker_fills": false,
+      "tick_seconds": 1,
+      "min_top_time_seconds": 3,
+      "fill_prob_per_tick": 0.15,
+      "partial_fill": true,
+      "max_fill_per_tick": 1,
+      "slippage_cents": 0,
+      "seed": 12345
+    }
+  },
+  "backtest": {
+    "SERIES_TICKER": "KXBTCD",
+    "DAYS": 14,
+    "START_DATE": null,
+    "END_DATE": null,
+    "MAX_EVENTS": 50,
+    "STEP_MINUTES": 1,
+    "MAX_STRIKES": 120,
+    "BAND_PCT": 25.0,
+    "CACHE_DIR": "data/cache",
+    "LOG_DIR": "backtests"
   }
 }
+
+Backward compatibility:
+- legacy flat strategy JSON is still supported by `load_config()`
+- backtest flat keys can be provided as `BT_<FIELD>`
 """
 
 from __future__ import annotations
@@ -51,6 +70,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field, fields, is_dataclass, replace
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple, Type, Union, get_args, get_origin, get_type_hints
 
 
@@ -264,16 +284,75 @@ class StrategyConfig:
             _warn(msg)
 
 
+@dataclass
+class BacktestConfig:
+    SERIES_TICKER: str = "KXBTCD"
+    DAYS: int = 14
+    START_DATE: Optional[str] = None
+    END_DATE: Optional[str] = None
+    EVENTS: Optional[str] = None
+    MAX_EVENTS: int = 50
+    STEP_MINUTES: int = 1
+    MAX_STRIKES: int = 120
+    BAND_PCT: float = 25.0
+    ONLY_LAST_N_MINUTES: Optional[int] = None
+    CACHE_DIR: str = "data/cache"
+    LOG_DIR: str = "backtests"
+    DEBUG_HTTP: bool = False
+
+    def validate(self) -> None:
+        if not isinstance(self.SERIES_TICKER, str) or not self.SERIES_TICKER.strip():
+            raise ValueError("SERIES_TICKER must be a non-empty string")
+        if int(self.DAYS) < 1:
+            raise ValueError("DAYS must be >= 1")
+        if int(self.MAX_EVENTS) < 1:
+            raise ValueError("MAX_EVENTS must be >= 1")
+        if int(self.STEP_MINUTES) < 1:
+            raise ValueError("STEP_MINUTES must be >= 1")
+        if int(self.MAX_STRIKES) < 1:
+            raise ValueError("MAX_STRIKES must be >= 1")
+        if float(self.BAND_PCT) <= 0:
+            raise ValueError("BAND_PCT must be > 0")
+        if self.ONLY_LAST_N_MINUTES is not None and int(self.ONLY_LAST_N_MINUTES) < 1:
+            raise ValueError("ONLY_LAST_N_MINUTES must be >= 1 when set")
+        if not isinstance(self.CACHE_DIR, str) or not self.CACHE_DIR.strip():
+            raise ValueError("CACHE_DIR must be a non-empty string")
+        if not isinstance(self.LOG_DIR, str) or not self.LOG_DIR.strip():
+            raise ValueError("LOG_DIR must be a non-empty string")
+
+        start = self.START_DATE
+        end = self.END_DATE
+        if (start is None) != (end is None):
+            raise ValueError("START_DATE and END_DATE must be both set or both omitted")
+        if start is not None:
+            try:
+                sdt = date.fromisoformat(str(start))
+                edt = date.fromisoformat(str(end))
+            except Exception:
+                raise ValueError("START_DATE/END_DATE must be YYYY-MM-DD")
+            if edt < sdt:
+                raise ValueError("END_DATE must be >= START_DATE")
+
+
 DEFAULT_CONFIG = StrategyConfig()
+DEFAULT_BACKTEST_CONFIG = BacktestConfig()
+
+
+def _field_type_map_for(cls: Type[Any]) -> Dict[str, Type[Any]]:
+    try:
+        return dict(get_type_hints(cls, globalns=globals(), localns=globals()))
+    except Exception:
+        return {f.name: f.type for f in fields(cls)}
 
 
 def _field_type_map() -> Dict[str, Type[Any]]:
     # With `from __future__ import annotations`, dataclass field types may be strings.
     # Resolve them via get_type_hints so coercion works consistently.
-    try:
-        return dict(get_type_hints(StrategyConfig, globalns=globals(), localns=globals()))
-    except Exception:
-        return {f.name: f.type for f in fields(StrategyConfig)}
+    return _field_type_map_for(StrategyConfig)
+
+
+def _backtest_field_type_map() -> Dict[str, Type[Any]]:
+    return _field_type_map_for(BacktestConfig)
 
 
 def _coerce_optional_int(field: str, value: Any) -> Optional[int]:
@@ -366,18 +445,10 @@ def _apply_overrides(base: StrategyConfig, overrides: Dict[str, Any], *, present
     return out
 
 
-def load_config() -> StrategyConfig:
-    """
-    Load StrategyConfig from JSON path in env var KALSHI_EDGE_CONFIG_JSON.
-
-    - If env var unset: return DEFAULT_CONFIG.
-    - If set: load JSON, override defaults, coerce types, validate, and return.
-    """
+def _read_config_json_from_env() -> Optional[Dict[str, Any]]:
     path = os.environ.get(ENV_VAR)
     if not path:
-        cfg = replace(DEFAULT_CONFIG)
-        cfg.validate()
-        return cfg
+        return None
 
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -391,9 +462,55 @@ def load_config() -> StrategyConfig:
 
     if not isinstance(data, dict):
         raise ValueError(f"Config JSON must be an object/dict at top-level (got {type(data).__name__})")
+    return {str(k): v for k, v in data.items() if isinstance(k, str)}
 
+
+def _extract_strategy_source(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    If config has top-level 'strategy', only use that object for strategy fields.
+    Otherwise use legacy flat top-level keys.
+    """
+    strategy_obj = data.get("strategy")
+    if isinstance(strategy_obj, dict):
+        return {str(k): v for k, v in strategy_obj.items() if isinstance(k, str)}
+    return data
+
+
+def _extract_backtest_source(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    If config has top-level 'backtest', only use that object for backtest fields.
+    Otherwise use legacy flat `BT_<FIELD>` keys.
+    """
+    backtest_obj = data.get("backtest")
+    if isinstance(backtest_obj, dict):
+        return {str(k): v for k, v in backtest_obj.items() if isinstance(k, str)}
+
+    out: Dict[str, Any] = {}
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        if k.startswith("BT_") and len(k) > 3:
+            out[k[3:]] = v
+    return out
+
+
+def load_config() -> StrategyConfig:
+    """
+    Load StrategyConfig from JSON path in env var KALSHI_EDGE_CONFIG_JSON.
+
+    - If env var unset: return DEFAULT_CONFIG.
+    - If config has top-level "strategy": use only that dict.
+    - Else use legacy flat top-level strategy fields.
+    """
+    data = _read_config_json_from_env()
+    if data is None:
+        cfg = replace(DEFAULT_CONFIG)
+        cfg.validate()
+        return cfg
+
+    source = _extract_strategy_source(data)
     known = set(_field_type_map().keys())
-    present = set(str(k) for k in data.keys() if isinstance(k, str))
+    present = set(source.keys())
 
     # Allow "simulation" as alias for "paper" (do not warn), with "paper" winning if both present.
     unknown = sorted([k for k in present if k not in known and k != "simulation"])
@@ -401,13 +518,52 @@ def load_config() -> StrategyConfig:
         _warn(f"Unknown keys ignored: {', '.join(unknown[:30])}" + (" ..." if len(unknown) > 30 else ""))
 
     # Normalize alias: if config uses "simulation" and not "paper", treat it as "paper".
-    if "paper" not in data and isinstance(data.get("simulation"), dict):
-        data = dict(data)
-        data["paper"] = data.get("simulation")
+    if "paper" not in source and isinstance(source.get("simulation"), dict):
+        source = dict(source)
+        source["paper"] = source.get("simulation")
 
-    cfg = _apply_overrides(replace(DEFAULT_CONFIG), {str(k): v for k, v in data.items() if isinstance(k, str)}, present_keys=present)
+    cfg = _apply_overrides(replace(DEFAULT_CONFIG), source, present_keys=present)
     cfg.validate()
     return cfg
+
+
+def load_backtest_config() -> BacktestConfig:
+    """
+    Load BacktestConfig from JSON path in env var KALSHI_EDGE_CONFIG_JSON.
+
+    Source priority:
+    1) top-level "backtest" object (preferred)
+    2) legacy flat keys with BT_ prefix, e.g. BT_DAYS
+    3) defaults
+    """
+    data = _read_config_json_from_env()
+    if data is None:
+        cfg = replace(DEFAULT_BACKTEST_CONFIG)
+        cfg.validate()
+        return cfg
+
+    source = _extract_backtest_source(data)
+    if not source:
+        cfg = replace(DEFAULT_BACKTEST_CONFIG)
+        cfg.validate()
+        return cfg
+
+    tmap = _backtest_field_type_map()
+    known = set(tmap.keys())
+    present = set(source.keys())
+    unknown = sorted([k for k in present if k not in known])
+    if unknown:
+        _warn(f"Unknown backtest keys ignored: {', '.join(unknown[:30])}" + (" ..." if len(unknown) > 30 else ""))
+
+    out = replace(DEFAULT_BACKTEST_CONFIG)
+    for k, raw in source.items():
+        if k not in tmap:
+            continue
+        t = tmap[k]
+        out = replace(out, **{k: _coerce_value(f"backtest.{k}", t, raw)})
+
+    out.validate()
+    return out
 
 
 def config_source_path() -> Optional[str]:

@@ -6,8 +6,10 @@ import tempfile
 import unittest
 
 from kalshi_edge.strategy_config import (
+    BacktestConfig,
     StrategyConfig,
     PaperConfig,
+    load_backtest_config,
     load_config,
     config_hash,
     config_to_dict,
@@ -23,6 +25,10 @@ class TestConfigDefaults(unittest.TestCase):
     def test_paper_config_validates(self) -> None:
         pc = PaperConfig()
         pc.validate()
+
+    def test_backtest_config_defaults_validate(self) -> None:
+        bc = BacktestConfig()
+        bc.validate()
 
     def test_config_to_dict_roundtrip(self) -> None:
         cfg = StrategyConfig()
@@ -67,6 +73,64 @@ class TestConfigFromFile(unittest.TestCase):
             self.assertAlmostEqual(cfg.MIN_EV, 0.10)
             self.assertEqual(cfg.ORDER_SIZE, 3)
             self.assertFalse(cfg.DEDUPE_MARKETS)
+        finally:
+            if old is None:
+                os.environ.pop(ENV_VAR, None)
+            else:
+                os.environ[ENV_VAR] = old
+            os.unlink(path)
+
+    def test_load_two_section_strategy_only(self) -> None:
+        data = {
+            "strategy": {"MIN_EV": 0.11, "ORDER_SIZE": 2},
+            "backtest": {"DAYS": 30, "MAX_EVENTS": 5},
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            path = f.name
+        old = os.environ.get(ENV_VAR)
+        try:
+            os.environ[ENV_VAR] = path
+            cfg = load_config()
+            self.assertAlmostEqual(cfg.MIN_EV, 0.11)
+            self.assertEqual(cfg.ORDER_SIZE, 2)
+        finally:
+            if old is None:
+                os.environ.pop(ENV_VAR, None)
+            else:
+                os.environ[ENV_VAR] = old
+            os.unlink(path)
+
+    def test_load_backtest_from_section(self) -> None:
+        data = {"backtest": {"DAYS": "7", "MAX_EVENTS": "12", "DEBUG_HTTP": "true"}}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            path = f.name
+        old = os.environ.get(ENV_VAR)
+        try:
+            os.environ[ENV_VAR] = path
+            bt = load_backtest_config()
+            self.assertEqual(bt.DAYS, 7)
+            self.assertEqual(bt.MAX_EVENTS, 12)
+            self.assertTrue(bt.DEBUG_HTTP)
+        finally:
+            if old is None:
+                os.environ.pop(ENV_VAR, None)
+            else:
+                os.environ[ENV_VAR] = old
+            os.unlink(path)
+
+    def test_load_backtest_from_legacy_bt_prefix(self) -> None:
+        data = {"BT_DAYS": "9", "BT_CACHE_DIR": "tmp/cache"}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            path = f.name
+        old = os.environ.get(ENV_VAR)
+        try:
+            os.environ[ENV_VAR] = path
+            bt = load_backtest_config()
+            self.assertEqual(bt.DAYS, 9)
+            self.assertEqual(bt.CACHE_DIR, "tmp/cache")
         finally:
             if old is None:
                 os.environ.pop(ENV_VAR, None)

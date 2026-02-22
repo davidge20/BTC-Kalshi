@@ -48,6 +48,11 @@ Top-level modules:
   trader_v2_engine.py Canonical trading engine (V2Trader)
   order_manager.py    Single-order lifecycle (create/amend/cancel/fill tracking)
   trade_log.py        Append-only JSONL event logger
+  backtest.py         Backtest entrypoint (python -m kalshi_edge.backtest)
+  backtest_engine.py  Minute-cadence backtest simulator
+  kalshi_candles.py   Kalshi candles/events data access for backtests
+  coinbase_history.py Coinbase 1m history fetcher for backtests
+  cache.py            On-disk gzip JSON cache for backtests
 
 Sub-packages:
   data/kalshi/        Kalshi API client (client.py) + market-data parsing (models.py)
@@ -68,6 +73,11 @@ __all__ = [
     "pipeline",
     "render",
     "run",
+    "backtest",
+    "backtest_engine",
+    "kalshi_candles",
+    "coinbase_history",
+    "cache",
     "trade_log",
     "trader_v2_engine",
     # sub-packages
