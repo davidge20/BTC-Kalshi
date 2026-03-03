@@ -22,7 +22,7 @@ class TestTradeLogUpgrades(unittest.TestCase):
     def test_schema_validation_non_strict_annotates(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = td + "/log.jsonl"
-            log = TradeLogger(path, run_id="R1", base_fields={"strategy_name": "v2", "strategy_schema_version": "v2.2"})
+            log = TradeLogger(path, run_id="R1", base_fields={"strategy_name": "trader", "strategy_schema_version": "v2.2"})
             log.log("order_submit", {"market_ticker": "M1", "side": "yes"})  # missing count, price_cents
 
             with open(path, "r", encoding="utf-8") as f:
@@ -30,7 +30,7 @@ class TestTradeLogUpgrades(unittest.TestCase):
             rec = json.loads(line)
             self.assertEqual(rec["event"], "order_submit")
             self.assertEqual(rec["run_id"], "R1")
-            self.assertEqual(rec["strategy_name"], "v2")
+            self.assertEqual(rec["strategy_name"], "trader")
             self.assertIn("_schema_missing", rec)
             self.assertIn("count", rec["_schema_missing"])
             self.assertIn("price_cents", rec["_schema_missing"])
@@ -41,7 +41,7 @@ class TestTradeLogUpgrades(unittest.TestCase):
             log = TradeLogger(
                 path,
                 run_id="R1",
-                base_fields={"strategy_name": "v2", "strategy_schema_version": "v2.2"},
+                base_fields={"strategy_name": "trader", "strategy_schema_version": "v2.2"},
                 strict_schema=True,
             )
             with self.assertRaises(ValueError):

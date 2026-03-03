@@ -16,9 +16,10 @@ The output is a terminal table of **probability**, **liquidity/execution diagnos
 - `kalshi_edge/math_models.py`: probability model (`lognormal_prob_above`)
 - `kalshi_edge/ladder_eval.py`: orderbook parsing, `p_model`, `EV`, “buy-now proxy”
 - `kalshi_edge/render.py`: terminal table output
-- `kalshi_edge/trader_v2_engine.py`: trading engine (V2; entry + order lifecycle + JSONL logs)
-- `kalshi_edge/backtest.py`: backtest CLI entrypoint (`python3 -m kalshi_edge.backtest`)
-- `kalshi_edge/backtest_engine.py`: 1-minute-cadence backtest simulator
+- `kalshi_edge/trader_engine.py`: trader engine (entry + order lifecycle + JSONL logs)
+- `kalshi_edge/backtesting/backtest.py`: backtest CLI entrypoint (`python3 -m kalshi_edge.backtesting.backtest`)
+- `kalshi_edge/backtesting/backtest_engine.py`: 1-minute-cadence backtest simulator
+- `kalshi_edge/docs/paper_trading.md`: paper trading (`--dry-run`) and maker-fill simulation notes
 
 ### Setup
 
@@ -84,7 +85,7 @@ python3 -m kalshi_edge --config /path/to/config.json --watch --trade
 ```
 
 Notes:
-- `--trade` enables the V2 engine (`kalshi_edge/trader_v2_engine.py::V2Trader`).
+- `--trade` enables the trader engine (`kalshi_edge/trader_engine.py::Trader`).
 - If you pass `--reconcile-state`, the trader will attempt a best-effort startup reconciliation against live positions.
 
 ### Config workflow (VERY IMPORTANT)
@@ -105,9 +106,6 @@ This repo expects **one** JSON file with up to two top-level sections:
 - **Config path selection**:
   - Preferred: `--config /path/to/config.json` (sets `KALSHI_EDGE_CONFIG_JSON` for the process)
   - Alternative: `export KALSHI_EDGE_CONFIG_JSON=/path/to/config.json`
-- **Backwards compatibility**:
-  - If there is **no** top-level `"strategy"` object, `load_config()` treats the top-level object as “legacy flat strategy keys”.
-  - If there is **no** top-level `"backtest"` object, `load_backtest_config()` reads legacy backtest keys with a `BT_` prefix (e.g. `BT_DAYS`).
 - **Unknown keys** are ignored with a warning.
 
 #### Minimal config example
@@ -151,6 +149,89 @@ This is intentionally small; everything omitted falls back to defaults in `Strat
 ```
 
 For a complete example that includes every current key, see `strategy_config.example.json`.
+
+#### Config key reference (what each field does)
+
+Notes:
+
+- **Prices**: Kalshi binary prices are integer **cents** in \([0,100]\).
+- **`edge_pp` / EV**: throughout this repo, “EV” is **dollars per contract** for a \$1 binary, computed buy-only and **net of** `FEE_CENTS`.
+- **Percent fields**: `BAND_PCT` and `IV_BAND_PCT` are in **percent** units (e.g. `25.0` means ±25%).
+
+##### `strategy` (live evaluation + trading)
+
+| Key | Units / type | What it controls | Used in |
+|---|---|---|---|
+| `MIN_EV` | float, \$ / contract | Minimum net EV required for a **new entry**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `ORDER_SIZE` | int, contracts | Contracts added per entry (and per scale-in step), before caps. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_COST_PER_EVENT` | float, \$ | Cap on total entry cost (price + fee) across a single **event**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_POSITIONS_PER_EVENT` | int, markets | Max number of distinct market tickers held within one event. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_COST_PER_MARKET` | float, \$ | Cap on total entry cost (price + fee) within a single **market ticker**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_CONTRACTS_PER_MARKET` | int, contracts | Max total contracts held in one market ticker (including scale-ins). | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MIN_TOP_SIZE` | float, contracts | Liquidity gate: require top-of-book size ≥ this value. *(Ignored in backtests.)* | `kalshi_edge/trader_engine.py` |
+| `SPREAD_MAX_CENTS` | int, cents | Liquidity gate: skip candidates with spread wider than this. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `DEDUPE_MARKETS` | bool | If true: only one entry per market ticker (and forces `ALLOW_SCALE_IN=false`). | `kalshi_edge/strategy_config.py`, `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `ALLOW_SCALE_IN` | bool | If true: allow adding to an existing market position up to `MAX_CONTRACTS_PER_MARKET`. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `SCALE_IN_COOLDOWN_SECONDS` | int, seconds | Minimum time since last fill before scaling in again. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `SCALE_IN_MIN_EV` | float, \$ / contract | Minimum net EV required for **scale-in** entries (must be ≥ `MIN_EV`). | `kalshi_edge/strategy_config.py`, `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_ENTRIES_PER_TICK` | int | Per evaluation tick, submit at most this many new/amended entries. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_STRIKES` | int | Evaluation budget: how many strikes (closest-to-spot) to fetch/score per tick. | `kalshi_edge/run.py`, `kalshi_edge/pipeline.py`, `kalshi_edge/ladder_eval.py` |
+| `FEE_CENTS` | int, cents | Flat per-contract fee used in EV and cost math. | `kalshi_edge/ladder_eval.py`, `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `ORDER_MODE` | str | Execution mode: `"taker_only"`, `"maker_only"`, or `"hybrid"` (choose best of maker/taker). | `kalshi_edge/trader_engine.py` |
+| `POST_ONLY` | bool | Maker safety: avoid posting orders that would cross and become taker fills. | `kalshi_edge/trader_engine.py` |
+| `ORDER_REFRESH_SECONDS` | int, seconds | How frequently the trader refreshes tracked orders and throttles amendments. | `kalshi_edge/trader_engine.py` |
+| `CANCEL_STALE_SECONDS` | int, seconds | Cancel resting maker orders older than this. | `kalshi_edge/trader_engine.py` |
+| `P_REQUOTE_PP` | float, probability points | Cancel/requote resting maker orders when model probability moves by ≥ this amount (absolute \(|\Delta p|\)). | `kalshi_edge/trader_engine.py` |
+| `REFRESH_SECONDS` | int, seconds | Watch-loop sleep between evaluation ticks. | `kalshi_edge/run.py` |
+| `WINDOW_MINUTES` | int, minutes | Auto-discovery window for “closing soon” events (only when no `--event/--url`). | `kalshi_edge/market_discovery.py`, `kalshi_edge/run.py` |
+| `BAND_PCT` | float, percent | Strike selection band (±%) used when choosing which strikes to evaluate. | `kalshi_edge/run.py`, `kalshi_edge/ladder_eval.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `SORT_MODE` | str | Ladder sorting: `"ev"` (default), `"strike"`, `"sens"`. | `kalshi_edge/ladder_eval.py`, `kalshi_edge/run.py` |
+| `DEPTH_WINDOW_CENTS` | int, cents | Depth diagnostic: sum size within this many cents of best bid (per side). | `kalshi_edge/ladder_eval.py` |
+| `THREADS` | int | Thread pool size for concurrent orderbook fetches. | `kalshi_edge/ladder_eval.py`, `kalshi_edge/run.py` |
+| `IV_BAND_PCT` | float, percent | Deribit IV input: use options strikes within ± this % of spot when estimating near-ATM IV. | `kalshi_edge/market_state.py`, `kalshi_edge/run.py` |
+| `MIN_MINUTES_LEFT` | float, minutes | With `LOCK_EVENT=true`, unlock the current event once time-left ≤ this threshold. | `kalshi_edge/run.py` |
+| `LOCK_EVENT` | bool | In watch + auto-discovery: stick to the first discovered event until near-expiry. | `kalshi_edge/run.py` |
+| `LOG_SETTLEMENT` | bool | If true (and `--watch --trade`), periodically check/log settlement for positions. | `kalshi_edge/run.py` |
+| `TRADE_LOG_DIR` | string path or null | If set (and no `--trade-log-file`), write per-run logs under `TRADE_LOG_DIR/<YYYY-MM-DD>/<run_id>.jsonl`. | `kalshi_edge/run.py` |
+
+##### `strategy.paper` (paper trading / `--dry-run` maker fill simulation)
+
+These only matter when:
+
+- you run with `--dry-run`, and
+- `ORDER_MODE` is `maker_only` or `hybrid`, and
+- `paper.simulate_maker_fills` is `true`.
+
+| Key | Units / type | What it controls | Used in |
+|---|---|---|---|
+| `simulate_maker_fills` | bool | Enables synthetic fills for **resting maker** orders. | `kalshi_edge/trader_engine.py`, `kalshi_edge/paper_fill_sim.py`, `kalshi_edge/docs/paper_trading.md` |
+| `tick_seconds` | float, seconds | Rate-limits simulation ticks (0 disables the limiter). | `kalshi_edge/paper_fill_sim.py` |
+| `min_top_time_seconds` | float, seconds | Must be “at top” for at least this long before stochastic fills can occur (unless crossing). | `kalshi_edge/paper_fill_sim.py` |
+| `fill_prob_per_tick` | float in \([0,1]\) | Per-tick fill probability once eligible. | `kalshi_edge/paper_fill_sim.py` |
+| `partial_fill` | bool | If true: fills can be partial. | `kalshi_edge/paper_fill_sim.py` |
+| `max_fill_per_tick` | int, contracts | Max contracts filled per simulation tick (when `partial_fill=true`). | `kalshi_edge/paper_fill_sim.py` |
+| `slippage_cents` | int, cents | Adversarial slippage applied to simulated fill price (against you). | `kalshi_edge/paper_fill_sim.py` |
+| `seed` | int or null | RNG seed for deterministic/reproducible paper fills. | `kalshi_edge/trader_engine.py`, `kalshi_edge/paper_fill_sim.py` |
+
+##### `backtest` (only used by `python3 -m kalshi_edge.backtesting.backtest`)
+
+Note: the backtest harness uses a simplified fill model (“immediate taker fill at ask when a quote exists”) and does **not** have orderbook size, so `strategy.MIN_TOP_SIZE` is ignored.
+
+| Key | Units / type | What it controls | Used in |
+|---|---|---|---|
+| `SERIES_TICKER` | str | Event series ticker to backtest (default `"KXBTCD"`). | `kalshi_edge/backtesting/backtest_engine.py` |
+| `DAYS` | int, days | Rolling lookback window when `START_DATE`/`END_DATE` are not set. | `kalshi_edge/backtesting/backtest.py` |
+| `START_DATE` | `YYYY-MM-DD` or null | Fixed start date (UTC day). Must be set together with `END_DATE`. | `kalshi_edge/backtesting/backtest.py` |
+| `END_DATE` | `YYYY-MM-DD` or null | Fixed end date (UTC day). Must be set together with `START_DATE`. | `kalshi_edge/backtesting/backtest.py` |
+| `EVENTS` | CSV string or null | Optional explicit event tickers (CSV) to simulate instead of listing by date. | `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_EVENTS` | int | Cap number of events simulated. | `kalshi_edge/backtesting/backtest_engine.py` |
+| `STEP_MINUTES` | int, minutes | Backtest simulation step size. | `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_STRIKES` | int | Per step, evaluate up to N strikes. | `kalshi_edge/backtesting/backtest_engine.py` |
+| `BAND_PCT` | float, percent | Strike selection band (±%) used by the strike picker. | `kalshi_edge/backtesting/backtest_engine.py` |
+| `ONLY_LAST_N_MINUTES` | int minutes or null | If set, only simulate the last N minutes before each event close. | `kalshi_edge/backtesting/backtest_engine.py` |
+| `CACHE_DIR` | string path | On-disk gzip JSON cache directory for fetched data. | `kalshi_edge/backtesting/backtest_engine.py` |
+| `LOG_DIR` | string path | Directory where backtest JSONL logs are written. | `kalshi_edge/backtesting/backtest.py` |
+| `DEBUG_HTTP` | bool | Enable HTTP debug printing in backtests. | `kalshi_edge/backtesting/backtest.py` |
 
 ### Logging & outputs
 

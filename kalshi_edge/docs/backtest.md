@@ -5,12 +5,12 @@ This repo includes a minute-cadence backtest harness designed for **fast strateg
 Canonical entrypoint:
 
 ```bash
-python3 -m kalshi_edge.backtest
+python3 -m kalshi_edge.backtesting.backtest
 ```
 
 ### What we simulate (as implemented)
 
-In `kalshi_edge/backtest_engine.py` the simulator runs a loop at `backtest.STEP_MINUTES` cadence (typically 1):
+In `kalshi_edge/backtesting/backtest_engine.py` the simulator runs a loop at `backtest.STEP_MINUTES` cadence (typically 1):
 
 - **Quote source**: Kalshi 1-minute candlesticks per market (YES bid/ask in cents when available)
 - **Decision rule**: compute `p_model` at each minute and select EV-positive candidates
@@ -42,16 +42,45 @@ Backtests are configured via the same JSON config file used for live runs.
 
 ```bash
 export KALSHI_EDGE_CONFIG_JSON=/path/to/config.json
-python3 -m kalshi_edge.backtest
+python3 -m kalshi_edge.backtesting.backtest
 ```
 
 Optional config override:
 
 ```bash
-python3 -m kalshi_edge.backtest --config /path/to/config.json
+python3 -m kalshi_edge.backtesting.backtest --config /path/to/config.json
 ```
 
 There are no tuning CLI flags beyond `--config`; tuning lives under the `"backtest"` section (and shared `"strategy"` knobs still apply).
+
+### Date format and range behavior
+
+- `START_DATE` and `END_DATE` must use `YYYY-MM-DD` (UTC date), for example `2026-02-01`.
+- Set **both** `START_DATE` and `END_DATE` for a fixed range.
+- Leave both as `null` to use a deterministic rolling window via `DAYS`:
+  `[today_utc_00:00 - DAYS, today_utc_00:00)`.
+
+Example fixed-range backtest block:
+
+```json
+"backtest": {
+  "SERIES_TICKER": "KXBTCD",
+  "DAYS": 14,
+  "START_DATE": "2026-02-01",
+  "END_DATE": "2026-02-14",
+  "EVENTS": null,
+  "MAX_EVENTS": 50,
+  "STEP_MINUTES": 1,
+  "MAX_STRIKES": 120,
+  "BAND_PCT": 25.0,
+  "ONLY_LAST_N_MINUTES": 240,
+  "CACHE_DIR": "data/cache",
+  "LOG_DIR": "backtests",
+  "DEBUG_HTTP": false
+}
+```
+
+When fixed dates are set, the engine treats the range as whole UTC days and runs on `[START_DATE 00:00Z, END_DATE+1 day 00:00Z)`.
 
 ### Backtest config keys (`"backtest": {...}`)
 
@@ -75,7 +104,7 @@ All keys below are defined in `kalshi_edge/strategy_config.py::BacktestConfig`.
 
 ### Caching
 
-The backtest engine uses an on-disk gzip JSON cache (`kalshi_edge/cache.py::FileCache`) under `backtest.CACHE_DIR`, including:
+The backtest engine uses an on-disk gzip JSON cache (`kalshi_edge/backtesting/cache.py::FileCache`) under `backtest.CACHE_DIR`, including:
 
 - `kalshi_markets/<EVENT>.json.gz`
 - `kalshi_candles/<MARKET_TICKER>/<start>-<end>-1m.json.gz`
@@ -93,7 +122,7 @@ rm -rf data/cache
 
 #### Console summary
 
-`python3 -m kalshi_edge.backtest` prints a summary from `kalshi_edge/backtest_report.py`, including:
+`python3 -m kalshi_edge.backtesting.backtest` prints a summary from `kalshi_edge/backtesting/backtest_report.py`, including:
 
 - events scanned / simulated
 - trades + contracts

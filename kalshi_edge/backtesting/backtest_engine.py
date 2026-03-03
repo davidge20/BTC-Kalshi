@@ -13,17 +13,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from kalshi_edge.cache import FileCache
-from kalshi_edge.coinbase_history import build_close_by_minute_ts, fetch_coinbase_candles_1m
-from kalshi_edge.constants import MINUTES_PER_YEAR
-from kalshi_edge.data.kalshi.models import market_strike_from_floor
-from kalshi_edge.kalshi_candles import (
+from kalshi_edge.backtesting.cache import FileCache
+from kalshi_edge.backtesting.coinbase_history import build_close_by_minute_ts, fetch_coinbase_candles_1m
+from kalshi_edge.backtesting.kalshi_candles import (
     fetch_batch_market_candles_1m,
     fetch_market_candles_1m,
     get_historical_cutoff,
     list_events,
     list_markets_for_event,
 )
+from kalshi_edge.constants import MINUTES_PER_YEAR
+from kalshi_edge.data.kalshi.models import market_strike_from_floor
 from kalshi_edge.math_models import clamp01, lognormal_prob_above
 from kalshi_edge.strategy_config import BacktestConfig, StrategyConfig, config_to_dict
 from kalshi_edge.util.time import parse_iso8601
@@ -197,7 +197,13 @@ def _event_ticker(e: Dict[str, Any]) -> Optional[str]:
 
 
 def _event_close_ts(e: Dict[str, Any]) -> Optional[int]:
-    v = e.get("close_time") or e.get("closeTime")
+    v = (
+        e.get("close_time")
+        or e.get("closeTime")
+        or e.get("strike_date")
+        or e.get("strikeDate")
+        or e.get("expiration_time")
+    )
     if not isinstance(v, str):
         return None
     try:
@@ -251,6 +257,13 @@ def _quote_spread(ybid: Optional[int], yask: Optional[int]) -> Optional[int]:
     if ybid is None or yask is None:
         return None
     return int(yask) - int(ybid)
+
+
+def _valid_taker_price_cents(px: Optional[int]) -> bool:
+    if px is None:
+        return False
+    # Kalshi binary tick is cents; do not allow synthetic free fills.
+    return 1 <= int(px) <= 99
 
 
 def _payout_cents_per_contract(result: Optional[str], side: str, settlement_value: Optional[int], entry_price_cents: int) -> Optional[int]:
@@ -380,13 +393,18 @@ def run_backtest(
             if not isinstance(rows, list):
                 rows = batched.get(m.ticker)
                 if rows is None:
-                    rows = fetch_market_candles_1m(
-                        http=http,
-                        market_ticker=m.ticker,
-                        start_ts=event_start_ts,
-                        end_ts=close_ts,
-                        use_historical=(m.close_ts < cutoff_ts),
-                    )
+                    try:
+                        rows = fetch_market_candles_1m(
+                            http=http,
+                            market_ticker=m.ticker,
+                            start_ts=event_start_ts,
+                            end_ts=close_ts,
+                            use_historical=(m.close_ts < cutoff_ts),
+                        )
+                    except Exception as e:
+                        # Keep backtest robust: skip market on fetch errors.
+                        print(f"[backtest] warning: candles unavailable for {m.ticker}: {e}")
+                        rows = []
                 cache.write_json_gz(cpath, rows)
             cmap: Dict[int, Candle] = {}
             for r in rows:
@@ -435,6 +453,9 @@ def run_backtest(
                 if yask is None and ybid is None:
                     continue
                 spread = _quote_spread(ybid, yask)
+                # Skip crossed/inverted quotes from sparse candle snapshots.
+                if spread is not None and int(spread) < 0:
+                    continue
                 if spread is not None and int(cfg.SPREAD_MAX_CENTS) >= 0 and int(spread) > int(cfg.SPREAD_MAX_CENTS):
                     continue
 
@@ -442,7 +463,7 @@ def run_backtest(
                 nbid, nask = derive_no_quotes(ybid, yask)
 
                 best: Optional[_Candidate] = None
-                if yask is not None:
+                if _valid_taker_price_cents(yask):
                     max_yes = max_acceptable_price_cents(
                         p_win=p_yes,
                         min_ev=float(cfg.MIN_EV),
@@ -462,7 +483,7 @@ def run_backtest(
                             spread=spread,
                             ts=t,
                         )
-                if nask is not None:
+                if _valid_taker_price_cents(nask):
                     p_no = 1.0 - p_yes
                     max_no = max_acceptable_price_cents(
                         p_win=p_no,

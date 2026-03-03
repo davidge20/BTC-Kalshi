@@ -45,21 +45,16 @@ Top-level modules:
   math_models.py      Probability model(s)
   ladder_eval.py      Apply model vs each strike + compute EV/edge
   render.py           Terminal table output
-  trader_v2_engine.py Canonical trading engine (V2Trader)
+  trader_engine.py    Canonical trading engine (Trader)
   order_manager.py    Single-order lifecycle (create/amend/cancel/fill tracking)
   trade_log.py        Append-only JSONL event logger
-  backtest.py         Backtest entrypoint (python -m kalshi_edge.backtest)
-  backtest_engine.py  Minute-cadence backtest simulator
-  kalshi_candles.py   Kalshi candles/events data access for backtests
-  coinbase_history.py Coinbase 1m history fetcher for backtests
-  cache.py            On-disk gzip JSON cache for backtests
+  (backtesting/)      Backtesting harness (CLI + engine + caches)
 
 Sub-packages:
   data/kalshi/        Kalshi API client (client.py) + market-data parsing (models.py)
   util/               Shared helpers — time.py (timestamps), coerce.py (safe casts)
   telemetry/          State I/O (state_io.py)
   report/             Post-run analysis (analyze.py — settlement PnL)
-  legacy/             Deprecated re-exports for trader_v0 / trader_v1
 """
 
 __all__ = [
@@ -73,17 +68,12 @@ __all__ = [
     "pipeline",
     "render",
     "run",
-    "backtest",
-    "backtest_engine",
-    "kalshi_candles",
-    "coinbase_history",
-    "cache",
+    "backtesting",
     "trade_log",
-    "trader_v2_engine",
+    "trader_engine",
     # sub-packages
     "data",
     "util",
     "telemetry",
     "report",
-    "legacy",
 ]

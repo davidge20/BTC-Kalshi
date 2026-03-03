@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import List
 
-from kalshi_edge.backtest_engine import BacktestSummary, EventResult
+from kalshi_edge.backtesting.backtest_engine import BacktestSummary, EventResult
 
 
 def _fmt_pct(x: float) -> str:

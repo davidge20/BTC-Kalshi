@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from kalshi_edge.strategy_config import PaperConfig, StrategyConfig, config_hash
-from kalshi_edge.trader_v2_engine import SCHEMA, V2Trader
+from kalshi_edge.trader_engine import SCHEMA, Trader
 
 
 class _HttpNoop:
@@ -77,7 +77,7 @@ def _read_events(path: str) -> List[str]:
     return out
 
 
-class TestV2TraderSmoke(unittest.TestCase):
+class TestTraderSmoke(unittest.TestCase):
     def test_on_tick_dry_run_taker_enters_and_persists_state(self) -> None:
         cfg = StrategyConfig(
             ORDER_MODE="taker_only",
@@ -98,7 +98,7 @@ class TestV2TraderSmoke(unittest.TestCase):
             state_file = os.path.join(td, "state.json")
             trade_log_file = os.path.join(td, "events.jsonl")
 
-            t = V2Trader(
+            t = Trader(
                 http=_HttpNoop(),
                 auth=None,
                 kalshi_base_url="https://example.invalid",
@@ -108,7 +108,7 @@ class TestV2TraderSmoke(unittest.TestCase):
                 config=cfg,
                 run_id="R1",
                 base_log_fields={
-                    "strategy_name": "v2",
+                    "strategy_name": "trader",
                     "strategy_schema_version": str(SCHEMA),
                     "config_hash": config_hash(cfg),
                     "dry_run": True,
@@ -165,7 +165,7 @@ class TestV2TraderSmoke(unittest.TestCase):
             state_file = os.path.join(td, "state.json")
             trade_log_file = os.path.join(td, "events.jsonl")
 
-            t = V2Trader(
+            t = Trader(
                 http=_HttpNoop(),
                 auth=None,
                 kalshi_base_url="https://example.invalid",
@@ -175,7 +175,7 @@ class TestV2TraderSmoke(unittest.TestCase):
                 config=cfg,
                 run_id="R1",
                 base_log_fields={
-                    "strategy_name": "v2",
+                    "strategy_name": "trader",
                     "strategy_schema_version": str(SCHEMA),
                     "config_hash": config_hash(cfg),
                     "dry_run": True,

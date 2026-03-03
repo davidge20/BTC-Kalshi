@@ -3,7 +3,7 @@ Backtest entrypoint.
 
 Run:
   export KALSHI_EDGE_CONFIG_JSON=/path/to/config.json
-  python3 -m kalshi_edge.backtest
+  python3 -m kalshi_edge.backtesting.backtest
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import argparse
 import os
 from datetime import date, datetime, time, timedelta, timezone
 
-from kalshi_edge.backtest_engine import run_backtest
-from kalshi_edge.backtest_report import print_backtest_report
+from kalshi_edge.backtesting.backtest_engine import run_backtest
+from kalshi_edge.backtesting.backtest_report import print_backtest_report
 from kalshi_edge.strategy_config import (
     ENV_VAR as CONFIG_ENV_VAR,
     load_backtest_config,
@@ -33,14 +33,15 @@ def _resolve_interval_utc(start_date: str | None, end_date: str | None, days: in
         return start_dt, end_dt
 
     today = datetime.now(timezone.utc).date()
-    end_dt = datetime.combine(today + timedelta(days=1), time(0, 0, 0), tzinfo=timezone.utc)
+    # Deterministic rolling window endpoint: start of current UTC day.
+    end_dt = datetime.combine(today, time(0, 0, 0), tzinfo=timezone.utc)
     start_dt = end_dt - timedelta(days=int(days))
     return start_dt, end_dt
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        prog="kalshi_edge.backtest",
+        prog="kalshi_edge.backtesting.backtest",
         description="Run minute-cadence backtest for Kalshi BTC ladder strategy.",
     )
     ap.add_argument(

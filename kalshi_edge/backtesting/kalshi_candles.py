@@ -4,7 +4,8 @@ Kalshi event/market/candlestick access for backtesting.
 
 from __future__ import annotations
 
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from kalshi_edge.constants import KALSHI
@@ -16,6 +17,68 @@ def _first_present(d: Dict[str, Any], keys: Iterable[str]) -> Any:
         if k in d:
             return d.get(k)
     return None
+
+
+def _status_code_from_exc(exc: Exception) -> Optional[int]:
+    resp = getattr(exc, "response", None)
+    code = getattr(resp, "status_code", None)
+    if isinstance(code, int):
+        return code
+    return None
+
+
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    resp = getattr(exc, "response", None)
+    headers = getattr(resp, "headers", None)
+    if headers is None or not hasattr(headers, "get"):
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        sec = float(str(raw).strip())
+    except Exception:
+        return None
+    if sec < 0:
+        return None
+    return sec
+
+
+def _get_json_with_retry(
+    http: Any,
+    url: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    max_attempts: int = 6,
+    base_sleep_seconds: float = 0.5,
+) -> Dict[str, Any]:
+    """
+    Retry GET requests on transient statuses, especially 429 rate-limits.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, int(max_attempts) + 1):
+        try:
+            data = http.get_json(url, params=params)
+            if isinstance(data, dict):
+                return data
+            return {}
+        except Exception as exc:
+            last_exc = exc
+            code = _status_code_from_exc(exc)
+            if code not in {429, 500, 502, 503, 504}:
+                raise
+            if attempt >= int(max_attempts):
+                break
+            retry_after = _retry_after_seconds(exc)
+            sleep_s = (
+                float(retry_after)
+                if retry_after is not None
+                else min(8.0, float(base_sleep_seconds) * (2.0 ** (attempt - 1)))
+            )
+            time.sleep(max(0.05, sleep_s))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"GET failed without exception: {url}")
 
 
 def parse_price_cents(raw: Any) -> Optional[int]:
@@ -30,6 +93,26 @@ def parse_price_cents(raw: Any) -> Optional[int]:
     if raw is None:
         return None
     if isinstance(raw, bool):
+        return None
+
+    if isinstance(raw, dict):
+        # Common nested quote shape:
+        # {"close": 99, "close_dollars": "0.9900", ...}
+        # For quote candles, prefer close/previous-style fields; avoid high/low/open
+        # because they can create crossed synthetic quotes.
+        for k in (
+            "close",
+            "close_cents",
+            "close_dollars",
+            "previous",
+            "previous_dollars",
+            "price",
+            "value",
+        ):
+            if k in raw:
+                v = parse_price_cents(raw.get(k))
+                if v is not None:
+                    return v
         return None
 
     val: float
@@ -109,16 +192,32 @@ def normalize_candles(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def get_historical_cutoff(http: Any) -> datetime:
     data = http.get_json(f"{KALSHI}/historical/cutoff")
-    cand = None
-    if isinstance(data, dict):
-        cand = (
-            data.get("cutoff")
-            or data.get("historical_cutoff")
-            or (data.get("historical") or {}).get("cutoff")
-        )
-    if isinstance(cand, str):
-        return parse_iso8601(cand)
-    raise RuntimeError("Could not parse /historical/cutoff response")
+    if not isinstance(data, dict):
+        # Keep backtest running even if this endpoint shape changes unexpectedly.
+        return datetime.now(timezone.utc)
+
+    # Observed response shape:
+    # {"market_settled_ts":"...", "orders_updated_ts":"...", "trades_created_ts":"..."}
+    # Retain older fallbacks for compatibility.
+    candidates = [
+        data.get("market_settled_ts"),
+        data.get("cutoff"),
+        data.get("historical_cutoff"),
+        (data.get("historical") or {}).get("cutoff"),
+        data.get("orders_updated_ts"),
+        data.get("trades_created_ts"),
+    ]
+    for cand in candidates:
+        if isinstance(cand, str):
+            try:
+                return parse_iso8601(cand)
+            except Exception:
+                continue
+        if isinstance(cand, (int, float)):
+            return datetime.fromtimestamp(int(cand), tz=timezone.utc)
+
+    # Safe fallback: live/historical fetchers already have endpoint fallbacks.
+    return datetime.now(timezone.utc)
 
 
 def list_events(
@@ -127,6 +226,7 @@ def list_events(
     start_ts: int,
     end_ts: int,
     status: str = "settled",
+    page_sleep_seconds: float = 0.08,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
@@ -139,7 +239,7 @@ def list_events(
         }
         if cursor:
             params["cursor"] = cursor
-        data = http.get_json(f"{KALSHI}/events", params=params)
+        data = _get_json_with_retry(http, f"{KALSHI}/events", params=params)
         rows = []
         if isinstance(data, dict):
             rows = data.get("events") or []
@@ -150,7 +250,17 @@ def list_events(
         for e in rows:
             if not isinstance(e, dict):
                 continue
-            close_s = _first_present(e, ["close_time", "closeTime", "event_close_time"])
+            close_s = _first_present(
+                e,
+                [
+                    "close_time",
+                    "closeTime",
+                    "event_close_time",
+                    "strike_date",
+                    "strikeDate",
+                    "expiration_time",
+                ],
+            )
             try:
                 close_dt = parse_iso8601(str(close_s))
             except Exception:
@@ -161,6 +271,8 @@ def list_events(
 
         if not cursor:
             break
+        if float(page_sleep_seconds) > 0:
+            time.sleep(float(page_sleep_seconds))
 
     out.sort(key=lambda e: str(_first_present(e, ["close_time", "closeTime"]) or ""))
     return out
@@ -182,28 +294,28 @@ def list_markets_for_event(http: Any, event_ticker: str, cutoff_dt: datetime) ->
     params = {"event_ticker": str(event_ticker), "limit": 500}
 
     try:
-        live = http.get_json(f"{KALSHI}/markets", params=params)
+        live = _get_json_with_retry(http, f"{KALSHI}/markets", params=params)
         rows = _markets_from_payload(live)
         if rows:
             return rows
     except Exception:
         pass
 
-    hist = http.get_json(f"{KALSHI}/historical/markets", params=params)
+    hist = _get_json_with_retry(http, f"{KALSHI}/historical/markets", params=params)
     rows = _markets_from_payload(hist)
     if rows:
         return rows
 
     # Final fallback: event detail endpoint(s).
     try:
-        ev = http.get_json(f"{KALSHI}/events/{event_ticker}", params={"with_nested_markets": "true"})
+        ev = _get_json_with_retry(http, f"{KALSHI}/events/{event_ticker}", params={"with_nested_markets": "true"})
         rows = _markets_from_payload(ev)
         if rows:
             return rows
     except Exception:
         pass
 
-    evh = http.get_json(f"{KALSHI}/historical/events/{event_ticker}", params={"with_nested_markets": "true"})
+    evh = _get_json_with_retry(http, f"{KALSHI}/historical/events/{event_ticker}", params={"with_nested_markets": "true"})
     return _markets_from_payload(evh)
 
 
@@ -231,19 +343,25 @@ def fetch_market_candles_1m(
       {"ts": int, "yes_bid_cents": Optional[int], "yes_ask_cents": Optional[int]}
     """
     params = {"start_ts": int(start_ts), "end_ts": int(end_ts), "period_interval": 1}
-    live_url = f"{KALSHI}/markets/{market_ticker}/candlesticks"
+    series_ticker = str(market_ticker).split("-", 1)[0]
+    live_url = f"{KALSHI}/series/{series_ticker}/markets/{market_ticker}/candlesticks"
+    live_fallback_url = f"{KALSHI}/markets/{market_ticker}/candlesticks"
     hist_url = f"{KALSHI}/historical/markets/{market_ticker}/candlesticks"
-    order = [hist_url, live_url] if use_historical else [live_url, hist_url]
+    order = [hist_url, live_url, live_fallback_url] if use_historical else [live_url, live_fallback_url, hist_url]
 
     last_err: Optional[Exception] = None
     for url in order:
         try:
-            payload = http.get_json(url, params=params)
+            payload = _get_json_with_retry(http, url, params=params)
             rows = _extract_candle_rows(payload)
             return normalize_candles(rows)
         except Exception as e:
             last_err = e
             continue
+    # Missing candlestick history for some market tickers is expected in practice.
+    # Treat not-found as "no data" so one ticker does not abort the full run.
+    if last_err is not None and _status_code_from_exc(last_err) == 404:
+        return []
     raise RuntimeError(f"Failed candles fetch for {market_ticker}: {last_err}")
 
 
@@ -262,7 +380,7 @@ def fetch_batch_market_candles_1m(
         return {}
 
     params = {
-        "tickers": ",".join(tickers[:100]),
+        "market_tickers": ",".join(tickers[:100]),
         "start_ts": int(start_ts),
         "end_ts": int(end_ts),
         "period_interval": 1,
@@ -273,18 +391,28 @@ def fetch_batch_market_candles_1m(
     ]
     for url in urls:
         try:
-            payload = http.get_json(url, params=params)
+            payload = _get_json_with_retry(http, url, params=params)
         except Exception:
             continue
         if not isinstance(payload, dict):
             continue
         raw = payload.get("candlesticks_by_ticker") or payload.get("candles_by_ticker") or {}
-        if not isinstance(raw, dict):
-            continue
         out: Dict[str, List[Dict[str, Any]]] = {}
-        for tkr, rows in raw.items():
-            if isinstance(rows, list):
-                out[str(tkr)] = normalize_candles([x for x in rows if isinstance(x, dict)])
+        if isinstance(raw, dict):
+            for tkr, rows in raw.items():
+                if isinstance(rows, list):
+                    out[str(tkr)] = normalize_candles([x for x in rows if isinstance(x, dict)])
+        # Observed shape:
+        # {"markets":[{"market_ticker":"...", "candlesticks":[...]}]}
+        markets = payload.get("markets")
+        if isinstance(markets, list):
+            for m in markets:
+                if not isinstance(m, dict):
+                    continue
+                tkr = m.get("market_ticker") or m.get("ticker")
+                rows = m.get("candlesticks") or m.get("candles")
+                if isinstance(tkr, str) and isinstance(rows, list):
+                    out[str(tkr)] = normalize_candles([x for x in rows if isinstance(x, dict)])
         if out:
             return out
     return {}

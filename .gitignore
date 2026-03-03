@@ -218,6 +218,8 @@ __marimo__/
 # kalshi_edge runtime artifacts
 logs/
 pnl_out/
+backtests/
+data/cache/
 markets_cache.json
 trade_log.jsonl
 .kalshi_edge_state.json

@@ -1,11 +1,11 @@
 """
-trader_v2_engine.py — canonical trading engine (V2Trader).
+trader_engine.py — canonical trading engine (Trader).
 
 This is the primary execution engine for kalshi_edge. It manages position
 entry/exit, order lifecycle (via OrderManager), risk caps, and structured
 JSONL logging.
 
-Previous engines (trader_v0, trader_v1) are deprecated; see legacy/.
+Previous engines (trader_v0, trader_v1) have been removed.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ class _ActionCandidate:
     top_size: Optional[float]
 
 
-class V2Trader:
+class Trader:
     def __init__(
         self,
         *,
@@ -1109,7 +1109,7 @@ def debug_order_manager() -> None:
         market_state: _MS
         rows: List[_Row]
 
-    t = V2Trader(
+    t = Trader(
         http=_HttpNoop(),
         auth=None,
         kalshi_base_url="https://example.invalid",
@@ -1118,7 +1118,6 @@ def debug_order_manager() -> None:
         dry_run=True,
         config=cfg,
     )
-
     row1 = _Row(
         ticker="TEST-MKT",
         p_model=0.70,
@@ -1162,4 +1161,8 @@ def debug_order_manager() -> None:
     res2 = _Res(event_ticker="TEST-EVT", minutes_left=10.0, market_state=_MS(), rows=[row2])
     t.on_tick(res2)
     assert len(t.active_order_by_market) <= 1
+
+
+# Backwards compatible alias (older code/tests may still import V2Trader).
+V2Trader = Trader
 

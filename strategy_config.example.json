@@ -44,15 +44,15 @@
   },
   "backtest": {
     "SERIES_TICKER": "KXBTCD",
-    "DAYS": 14,
+    "DAYS": 90,
     "START_DATE": null,
     "END_DATE": null,
     "EVENTS": null,
-    "MAX_EVENTS": 50,
+    "MAX_EVENTS": 3000,
     "STEP_MINUTES": 1,
     "MAX_STRIKES": 120,
     "BAND_PCT": 25.0,
-    "ONLY_LAST_N_MINUTES": 240,
+    "ONLY_LAST_N_MINUTES": null,
     "CACHE_DIR": "data/cache",
     "LOG_DIR": "backtests",
     "DEBUG_HTTP": false

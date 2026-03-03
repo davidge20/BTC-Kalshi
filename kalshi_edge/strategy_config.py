@@ -8,7 +8,7 @@ Usage:
 
     export KALSHI_EDGE_CONFIG_JSON=/path/to/config.json
     python3 -m kalshi_edge.run --watch
-    python3 -m kalshi_edge.backtest
+    python3 -m kalshi_edge.backtesting.backtest
 
 Preferred two-section JSON:
 
@@ -59,8 +59,7 @@ Preferred two-section JSON:
 }
 
 Backward compatibility:
-- legacy flat strategy JSON is still supported by `load_config()`
-- backtest flat keys can be provided as `BT_<FIELD>`
+None. The config must use the canonical top-level `"strategy"` / `"backtest"` objects.
 """
 
 from __future__ import annotations
@@ -467,31 +466,23 @@ def _read_config_json_from_env() -> Optional[Dict[str, Any]]:
 
 def _extract_strategy_source(data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    If config has top-level 'strategy', only use that object for strategy fields.
-    Otherwise use legacy flat top-level keys.
+    Config must have top-level 'strategy'; only use that object for strategy fields.
     """
     strategy_obj = data.get("strategy")
     if isinstance(strategy_obj, dict):
         return {str(k): v for k, v in strategy_obj.items() if isinstance(k, str)}
-    return data
+    raise ValueError('Config JSON must contain a top-level "strategy" object')
 
 
 def _extract_backtest_source(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     If config has top-level 'backtest', only use that object for backtest fields.
-    Otherwise use legacy flat `BT_<FIELD>` keys.
+    Otherwise return empty dict (defaults will be used).
     """
     backtest_obj = data.get("backtest")
     if isinstance(backtest_obj, dict):
         return {str(k): v for k, v in backtest_obj.items() if isinstance(k, str)}
-
-    out: Dict[str, Any] = {}
-    for k, v in data.items():
-        if not isinstance(k, str):
-            continue
-        if k.startswith("BT_") and len(k) > 3:
-            out[k[3:]] = v
-    return out
+    return {}
 
 
 def load_config() -> StrategyConfig:
@@ -499,8 +490,7 @@ def load_config() -> StrategyConfig:
     Load StrategyConfig from JSON path in env var KALSHI_EDGE_CONFIG_JSON.
 
     - If env var unset: return DEFAULT_CONFIG.
-    - If config has top-level "strategy": use only that dict.
-    - Else use legacy flat top-level strategy fields.
+    - Config must have top-level "strategy": use only that dict.
     """
     data = _read_config_json_from_env()
     if data is None:
@@ -512,15 +502,9 @@ def load_config() -> StrategyConfig:
     known = set(_field_type_map().keys())
     present = set(source.keys())
 
-    # Allow "simulation" as alias for "paper" (do not warn), with "paper" winning if both present.
-    unknown = sorted([k for k in present if k not in known and k != "simulation"])
+    unknown = sorted([k for k in present if k not in known])
     if unknown:
         _warn(f"Unknown keys ignored: {', '.join(unknown[:30])}" + (" ..." if len(unknown) > 30 else ""))
-
-    # Normalize alias: if config uses "simulation" and not "paper", treat it as "paper".
-    if "paper" not in source and isinstance(source.get("simulation"), dict):
-        source = dict(source)
-        source["paper"] = source.get("simulation")
 
     cfg = _apply_overrides(replace(DEFAULT_CONFIG), source, present_keys=present)
     cfg.validate()
@@ -533,8 +517,7 @@ def load_backtest_config() -> BacktestConfig:
 
     Source priority:
     1) top-level "backtest" object (preferred)
-    2) legacy flat keys with BT_ prefix, e.g. BT_DAYS
-    3) defaults
+    2) defaults
     """
     data = _read_config_json_from_env()
     if data is None:

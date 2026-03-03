@@ -48,7 +48,7 @@ class FileCache:
         return self._path(
             "kalshi_candles",
             _safe_part(market_ticker),
-            f"{int(start_ts)}-{int(end_ts)}-1m.json.gz",
+            f"{int(start_ts)}-{int(end_ts)}-1m-v2.json.gz",
         )
 
     def coinbase_candles_path(self, product: str, start_ts: int, end_ts: int) -> str:

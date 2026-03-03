@@ -148,7 +148,7 @@ def main() -> None:
         args.kalshi_base_url = KALSHI
 
     if args.debug_order_manager:
-        from kalshi_edge.trader_v2_engine import debug_order_manager
+        from kalshi_edge.trader_engine import debug_order_manager
 
         debug_order_manager()
         return
@@ -156,7 +156,7 @@ def main() -> None:
     # --- Set up trader ---
     trader = None
     if args.trade:
-        from kalshi_edge.trader_v2_engine import SCHEMA as V2_SCHEMA, V2Trader
+        from kalshi_edge.trader_engine import SCHEMA as TRADER_SCHEMA, Trader
 
         http_trade = HttpClient(debug=args.debug_http)
         auth = None
@@ -178,7 +178,7 @@ def main() -> None:
             "subaccount": int(args.subaccount) if args.subaccount is not None else None,
         }
 
-        trader = V2Trader(
+        trader = Trader(
             http=http_trade,
             auth=auth,
             kalshi_base_url=args.kalshi_base_url,
@@ -188,7 +188,7 @@ def main() -> None:
             config=cfg,
             subaccount=int(args.subaccount) if args.subaccount is not None else None,
             run_id=run_id,
-            base_log_fields={**base_fields, "strategy_name": "v2", "strategy_schema_version": str(V2_SCHEMA)},
+            base_log_fields={**base_fields, "strategy_name": "trader", "strategy_schema_version": str(TRADER_SCHEMA)},
             strict_log_schema=bool(args.strict_log_schema),
             full_config_on_start={"config": config_to_dict(cfg)},
         )
