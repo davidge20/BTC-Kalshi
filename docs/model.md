@@ -89,7 +89,7 @@ Then:
 
 \[
 p_{\text{model}}=\mathbb{P}(S_T\ge K)
-=\mathbb{P}\!\left(X \ge \ln(K/S_0)\right)
+:=\mathbb{P}\!\left(X \ge \ln(K/S_0)\right)
 \]
 
 Standardizing \(Z=X/(\sigma\sqrt{t})\sim\mathcal{N}(0,1)\) yields:
@@ -112,9 +112,9 @@ Then:
 
 \[
 p_{\text{model}}
-=\mathbb{P}(S_T \ge K)
-=1-\Phi\!\left(\frac{\ln(K/S_0)}{\sigma\sqrt{t}}\right)
-=\Phi(d_2)
+:=\mathbb{P}(S_T \ge K)
+:=1-\Phi\!\left(\frac{\ln(K/S_0)}{\sigma\sqrt{t}}\right)
+:=\Phi(d_2)
 \]
 
 with:

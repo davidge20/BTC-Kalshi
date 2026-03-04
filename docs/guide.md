@@ -19,7 +19,7 @@ The output is a terminal table of **probability**, **liquidity/execution diagnos
 - `kalshi_edge/trader_engine.py`: trader engine (entry + order lifecycle + JSONL logs)
 - `kalshi_edge/backtesting/backtest.py`: backtest CLI entrypoint (`python3 -m kalshi_edge.backtesting.backtest`)
 - `kalshi_edge/backtesting/backtest_engine.py`: 1-minute-cadence backtest simulator
-- `kalshi_edge/docs/paper_trading.md`: paper trading (`--dry-run`) and maker-fill simulation notes
+- `docs/paper_trading.md`: paper trading (`--dry-run`) and maker-fill simulation notes
 
 ### Setup
 
@@ -204,7 +204,7 @@ These only matter when:
 
 | Key | Units / type | What it controls | Used in |
 |---|---|---|---|
-| `simulate_maker_fills` | bool | Enables synthetic fills for **resting maker** orders. | `kalshi_edge/trader_engine.py`, `kalshi_edge/paper_fill_sim.py`, `kalshi_edge/docs/paper_trading.md` |
+| `simulate_maker_fills` | bool | Enables synthetic fills for **resting maker** orders. | `kalshi_edge/trader_engine.py`, `kalshi_edge/paper_fill_sim.py`, `docs/paper_trading.md` |
 | `tick_seconds` | float, seconds | Rate-limits simulation ticks (0 disables the limiter). | `kalshi_edge/paper_fill_sim.py` |
 | `min_top_time_seconds` | float, seconds | Must be “at top” for at least this long before stochastic fills can occur (unless crossing). | `kalshi_edge/paper_fill_sim.py` |
 | `fill_prob_per_tick` | float in \([0,1]\) | Per-tick fill probability once eligible. | `kalshi_edge/paper_fill_sim.py` |
@@ -264,7 +264,7 @@ Core fields you’ll commonly see in the JSONL:
 - `price_cents`: candidate/order price in cents
 - `fee_cents`: assumed fee in cents per contract
 - `p_yes` / `p_win`: model probability for YES / side-specific win probability
-- `edge_pp` / `ev`: net EV in dollars per contract (see `kalshi_edge/docs/model.md`)
+- `edge_pp` / `ev`: net EV in dollars per contract (see `docs/model.md`)
 
 ### Limitations / gotchas (short)
 
@@ -273,6 +273,6 @@ Core fields you’ll commonly see in the JSONL:
 - **Fees are simplified**: the code uses a flat per-contract `FEE_CENTS` everywhere (not Kalshi’s full fee schedule).
 - **Execution model is approximate**:
   - live evaluation uses reciprocal-bid “ask proxies” (`Ybuy/Nbuy`) because asks can be missing/stale
-  - backtests use 1-minute candle bid/ask quotes (see `kalshi_edge/docs/backtest.md`)
+  - backtests use 1-minute candle bid/ask quotes (see `docs/backtest.md`)
 - **Liquidity gates matter**: `MIN_TOP_SIZE` and `SPREAD_MAX_CENTS` can eliminate most candidates in thin markets.
 

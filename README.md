@@ -25,6 +25,7 @@ python3 -m kalshi_edge --config strategy_config.example.json --watch --trade --d
 
 ## Docs
 
-- `kalshi_edge/docs/guide.md`: how to run the project + how config works
-- `kalshi_edge/docs/model.md`: probability + EV model (`p_model`, `sigma_blend`, `edge_pp`)
-- `kalshi_edge/docs/backtest.md`: minute-cadence backtesting with 1-minute candlesticks
+- `docs/guide.md`: how to run the project + how config works
+- `docs/model.md`: probability + EV model (`p_model`, `sigma_blend`, `edge_pp`)
+- `docs/paper_trading.md`: paper trading (`--dry-run`) and maker-fill simulation notes
+- `docs/backtest.md`: minute-cadence backtesting with 1-minute candlesticks
