@@ -1,6 +1,6 @@
 # `kalshi_edge`
 
-Research + trading CLI for **Kalshi BTC Above/Below ladders**. It compares ladder prices (YES/NO binaries, quoted in **cents**) to a simple model probability \(p_{\text{model}}=\mathbb{P}(S_T \ge K)\) derived from deeper BTC venues (spot + volatility), and reports **execution-aware EV** per contract.
+Research + trading CLI for **Kalshi BTC Above/Below ladders**. It compares ladder prices (YES/NO binaries, quoted in **cents**) to a simple model probability $p_{\text{model}}=\mathbb{P}(S_T \ge K)$ derived from deeper BTC venues (spot + volatility), and reports **execution-aware EV** per contract.
 
 > Disclaimer: research/education only — not financial advice. These markets are risky: model error, fees, and liquidity can dominate.
 

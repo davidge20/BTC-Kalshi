@@ -77,14 +77,14 @@ This is intentionally a minimal heuristic:
 
 Once an order has been eligible for at least `min_top_time_seconds`, the simulator is effectively sampling a “fill arrival” each tick:
 
-- tick duration \(\\Delta\) is `paper.tick_seconds`
-- per-tick fill probability \(p\) is `paper.fill_prob_per_tick`
+- tick duration $\Delta$ is `paper.tick_seconds`
+- per-tick fill probability $p$ is `paper.fill_prob_per_tick`
 
 An easy mental model for expected waiting time *after eligibility*:
 
-\\[
-\\mathbb{E}[\\text{time to fill}] \\approx \\frac{\\Delta}{p}
-\\]
+$$
+\mathbb{E}[\text{time to fill}] \approx \frac{\Delta}{p}
+$$
 
 Example: with `tick_seconds=1` and `fill_prob_per_tick=0.15`, the expected additional wait is ~6–7 seconds after the order has been at-top for `min_top_time_seconds`.
 

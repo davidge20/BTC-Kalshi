@@ -2,7 +2,7 @@
 
 ### What this project is
 
-`kalshi_edge` is a research + trading CLI for **Kalshi BTC Above/Below ladders**. For a given Kalshi event (or an auto-discovered “closing soon” event), it compares ladder prices to a simple, auditable model probability \(p_{\text{model}}=\mathbb{P}(S_T \ge K)\) built from deeper BTC venues (Deribit spot/index + Deribit options IV + Coinbase 1-minute realized vol).
+`kalshi_edge` is a research + trading CLI for **Kalshi BTC Above/Below ladders**. For a given Kalshi event (or an auto-discovered “closing soon” event), it compares ladder prices to a simple, auditable model probability $p_{\text{model}}=\mathbb{P}(S_T \ge K)$ built from deeper BTC venues (Deribit spot/index + Deribit options IV + Coinbase 1-minute realized vol).
 
 The output is a terminal table of **probability**, **liquidity/execution diagnostics**, and **per-contract EV** (net of a simplified flat fee) for each strike. Optional trading mode uses the same evaluation output to place orders under configurable caps and filters.
 
@@ -154,8 +154,8 @@ For a complete example that includes every current key, see `strategy_config.exa
 
 Notes:
 
-- **Prices**: Kalshi binary prices are integer **cents** in \([0,100]\).
-- **`edge_pp` / EV**: throughout this repo, “EV” is **dollars per contract** for a \$1 binary, computed buy-only and **net of** `FEE_CENTS`.
+- **Prices**: Kalshi binary prices are integer **cents** in $[0,100]$.
+- **`edge_pp` / EV**: throughout this repo, “EV” is **dollars per contract** for a $1 binary, computed buy-only and **net of** `FEE_CENTS`.
 - **Percent fields**: `BAND_PCT` and `IV_BAND_PCT` are in **percent** units (e.g. `25.0` means ±25%).
 
 ##### `strategy` (live evaluation + trading)
@@ -181,7 +181,7 @@ Notes:
 | `POST_ONLY` | bool | Maker safety: avoid posting orders that would cross and become taker fills. | `kalshi_edge/trader_engine.py` |
 | `ORDER_REFRESH_SECONDS` | int, seconds | How frequently the trader refreshes tracked orders and throttles amendments. | `kalshi_edge/trader_engine.py` |
 | `CANCEL_STALE_SECONDS` | int, seconds | Cancel resting maker orders older than this. | `kalshi_edge/trader_engine.py` |
-| `P_REQUOTE_PP` | float, probability points | Cancel/requote resting maker orders when model probability moves by ≥ this amount (absolute \(|\Delta p|\)). | `kalshi_edge/trader_engine.py` |
+| `P_REQUOTE_PP` | float, probability points | Cancel/requote resting maker orders when model probability moves by ≥ this amount (absolute $|\Delta p|$). | `kalshi_edge/trader_engine.py` |
 | `REFRESH_SECONDS` | int, seconds | Watch-loop sleep between evaluation ticks. | `kalshi_edge/run.py` |
 | `WINDOW_MINUTES` | int, minutes | Auto-discovery window for “closing soon” events (only when no `--event/--url`). | `kalshi_edge/market_discovery.py`, `kalshi_edge/run.py` |
 | `BAND_PCT` | float, percent | Strike selection band (±%) used when choosing which strikes to evaluate. | `kalshi_edge/run.py`, `kalshi_edge/ladder_eval.py`, `kalshi_edge/backtesting/backtest_engine.py` |
@@ -207,7 +207,7 @@ These only matter when:
 | `simulate_maker_fills` | bool | Enables synthetic fills for **resting maker** orders. | `kalshi_edge/trader_engine.py`, `kalshi_edge/paper_fill_sim.py`, `docs/paper_trading.md` |
 | `tick_seconds` | float, seconds | Rate-limits simulation ticks (0 disables the limiter). | `kalshi_edge/paper_fill_sim.py` |
 | `min_top_time_seconds` | float, seconds | Must be “at top” for at least this long before stochastic fills can occur (unless crossing). | `kalshi_edge/paper_fill_sim.py` |
-| `fill_prob_per_tick` | float in \([0,1]\) | Per-tick fill probability once eligible. | `kalshi_edge/paper_fill_sim.py` |
+| `fill_prob_per_tick` | float in $[0,1]$ | Per-tick fill probability once eligible. | `kalshi_edge/paper_fill_sim.py` |
 | `partial_fill` | bool | If true: fills can be partial. | `kalshi_edge/paper_fill_sim.py` |
 | `max_fill_per_tick` | int, contracts | Max contracts filled per simulation tick (when `partial_fill=true`). | `kalshi_edge/paper_fill_sim.py` |
 | `slippage_cents` | int, cents | Adversarial slippage applied to simulated fill price (against you). | `kalshi_edge/paper_fill_sim.py` |
@@ -239,7 +239,7 @@ Note: the backtest harness uses a simplified fill model (“immediate taker fill
 
 The CLI prints a summary (spot/vol/time-left) and a ladder table. The key table columns map directly to code in `kalshi_edge/render.py`:
 
-- `P`: `p_model` = model probability BTC \(\ge\) strike at close
+- `P`: `p_model` = model probability BTC $\ge$ strike at close
 - `Ybid/Nbid`: best bids (cents) from Kalshi orderbook
 - `Ybuy/Nbuy`: **buy-now proxy** prices (cents), derived as:
   - `Ybuy ≈ 100 - Nbid`
@@ -269,7 +269,7 @@ Core fields you’ll commonly see in the JSONL:
 ### Limitations / gotchas (short)
 
 - **Thin books**: if best bids are missing, the system cannot form `Ybuy/Nbuy`, so EV is `None` for that side.
-- **Prices are in cents**: all Kalshi prices are integer cents in \([0,100]\).
+- **Prices are in cents**: all Kalshi prices are integer cents in $[0,100]$.
 - **Fees are simplified**: the code uses a flat per-contract `FEE_CENTS` everywhere (not Kalshi’s full fee schedule).
 - **Execution model is approximate**:
   - live evaluation uses reciprocal-bid “ask proxies” (`Ybuy/Nbuy`) because asks can be missing/stale
