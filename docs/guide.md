@@ -155,25 +155,25 @@ For a complete example that includes every current key, see `strategy_config.exa
 Notes:
 
 - **Prices**: Kalshi binary prices are integer **cents** in $[0,100]$.
-- **`edge_pp` / EV**: throughout this repo, “EV” is **dollars per contract** for a $1 binary, computed buy-only and **net of** `FEE_CENTS`.
+- **`edge_pp` / EV**: throughout this repo, “EV” is **dollars per contract** for a USD 1 binary, computed buy-only and **net of** `FEE_CENTS`.
 - **Percent fields**: `BAND_PCT` and `IV_BAND_PCT` are in **percent** units (e.g. `25.0` means ±25%).
 
 ##### `strategy` (live evaluation + trading)
 
 | Key | Units / type | What it controls | Used in |
 |---|---|---|---|
-| `MIN_EV` | float, \$ / contract | Minimum net EV required for a **new entry**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MIN_EV` | float, USD/contract | Minimum net EV required for a **new entry**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `ORDER_SIZE` | int, contracts | Contracts added per entry (and per scale-in step), before caps. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
-| `MAX_COST_PER_EVENT` | float, \$ | Cap on total entry cost (price + fee) across a single **event**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_COST_PER_EVENT` | float, USD | Cap on total entry cost (price + fee) across a single **event**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `MAX_POSITIONS_PER_EVENT` | int, markets | Max number of distinct market tickers held within one event. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
-| `MAX_COST_PER_MARKET` | float, \$ | Cap on total entry cost (price + fee) within a single **market ticker**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `MAX_COST_PER_MARKET` | float, USD | Cap on total entry cost (price + fee) within a single **market ticker**. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `MAX_CONTRACTS_PER_MARKET` | int, contracts | Max total contracts held in one market ticker (including scale-ins). | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `MIN_TOP_SIZE` | float, contracts | Liquidity gate: require top-of-book size ≥ this value. *(Ignored in backtests.)* | `kalshi_edge/trader_engine.py` |
 | `SPREAD_MAX_CENTS` | int, cents | Liquidity gate: skip candidates with spread wider than this. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `DEDUPE_MARKETS` | bool | If true: only one entry per market ticker (and forces `ALLOW_SCALE_IN=false`). | `kalshi_edge/strategy_config.py`, `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `ALLOW_SCALE_IN` | bool | If true: allow adding to an existing market position up to `MAX_CONTRACTS_PER_MARKET`. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `SCALE_IN_COOLDOWN_SECONDS` | int, seconds | Minimum time since last fill before scaling in again. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
-| `SCALE_IN_MIN_EV` | float, \$ / contract | Minimum net EV required for **scale-in** entries (must be ≥ `MIN_EV`). | `kalshi_edge/strategy_config.py`, `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
+| `SCALE_IN_MIN_EV` | float, USD/contract | Minimum net EV required for **scale-in** entries (must be ≥ `MIN_EV`). | `kalshi_edge/strategy_config.py`, `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `MAX_ENTRIES_PER_TICK` | int | Per evaluation tick, submit at most this many new/amended entries. | `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
 | `MAX_STRIKES` | int | Evaluation budget: how many strikes (closest-to-spot) to fetch/score per tick. | `kalshi_edge/run.py`, `kalshi_edge/pipeline.py`, `kalshi_edge/ladder_eval.py` |
 | `FEE_CENTS` | int, cents | Flat per-contract fee used in EV and cost math. | `kalshi_edge/ladder_eval.py`, `kalshi_edge/trader_engine.py`, `kalshi_edge/backtesting/backtest_engine.py` |
@@ -181,7 +181,7 @@ Notes:
 | `POST_ONLY` | bool | Maker safety: avoid posting orders that would cross and become taker fills. | `kalshi_edge/trader_engine.py` |
 | `ORDER_REFRESH_SECONDS` | int, seconds | How frequently the trader refreshes tracked orders and throttles amendments. | `kalshi_edge/trader_engine.py` |
 | `CANCEL_STALE_SECONDS` | int, seconds | Cancel resting maker orders older than this. | `kalshi_edge/trader_engine.py` |
-| `P_REQUOTE_PP` | float, probability points | Cancel/requote resting maker orders when model probability moves by ≥ this amount (absolute $|\Delta p|$). | `kalshi_edge/trader_engine.py` |
+| `P_REQUOTE_PP` | float, probability points | Cancel/requote resting maker orders when model probability moves by ≥ this amount (absolute \|Δp\|, i.e. absolute change in model probability). | `kalshi_edge/trader_engine.py` |
 | `REFRESH_SECONDS` | int, seconds | Watch-loop sleep between evaluation ticks. | `kalshi_edge/run.py` |
 | `WINDOW_MINUTES` | int, minutes | Auto-discovery window for “closing soon” events (only when no `--event/--url`). | `kalshi_edge/market_discovery.py`, `kalshi_edge/run.py` |
 | `BAND_PCT` | float, percent | Strike selection band (±%) used when choosing which strikes to evaluate. | `kalshi_edge/run.py`, `kalshi_edge/ladder_eval.py`, `kalshi_edge/backtesting/backtest_engine.py` |

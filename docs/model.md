@@ -31,12 +31,12 @@
 - $t$: time to close (years)
 - $\sigma$: annualized volatility (decimal, e.g. 0.85 = 85%)
 
-Time conversion uses `kalshi_edge/constants.py::MINUTES_PER_YEAR`:
+Time conversion uses `kalshi_edge/constants.py::MINUTES_PER_YEAR` (minutes per year). Let $m$ be `minutes_left` (minutes to close):
 
 $$
-t = \frac{\texttt{minutes\_left}}{\texttt{MINUTES\_PER\_YEAR}}
+t = \frac{m}{525{,}600}
 \qquad
-\texttt{MINUTES\_PER\_YEAR}=365\cdot 24\cdot 60=525{,}600
+525{,}600 = 365\cdot 24\cdot 60
 $$
 
 ### Modeling context: lognormal baseline (GBM intuition)
@@ -56,7 +56,7 @@ $$
 Under constant $\sigma$, the terminal log return is normally distributed:
 
 $$
-\ln\!\left(\frac{S_T}{S_0}\right) \sim \mathcal{N}\!\left(\left(\mu - \tfrac12\sigma^2\right)t,\ \sigma^2 t\right).
+\ln\left(\frac{S_T}{S_0}\right) \sim \mathcal{N}\left(\left(\mu - \tfrac12\sigma^2\right)t,\ \sigma^2 t\right).
 $$
 
 #### What the implementation assumes
@@ -64,7 +64,7 @@ $$
 The implementation uses a simplified “driftless” lognormal baseline:
 
 $$
-\ln\!\left(\frac{S_T}{S_0}\right)\sim \mathcal{N}(0,\sigma^2 t).
+\ln\left(\frac{S_T}{S_0}\right)\sim \mathcal{N}(0,\sigma^2 t).
 $$
 
 For horizons on the order of minutes to hours, the drift contribution is typically small relative to the diffusion scale $\sigma\sqrt{t}$. This also keeps the mapping from $\sigma$ to $p_{\text{model}}$ transparent.
@@ -82,14 +82,14 @@ Implemented in `kalshi_edge/math_models.py::lognormal_prob_above`.
 We model the terminal log return over the remaining horizon as:
 
 $$
-X := \ln\!\left(\frac{S_T}{S_0}\right)\sim\mathcal{N}(0,\sigma^2 t)
+X := \ln\left(\frac{S_T}{S_0}\right)\sim\mathcal{N}(0,\sigma^2 t)
 $$
 
 Then:
 
 $$
 p_{\text{model}}=\mathbb{P}(S_T\ge K)
-:=\mathbb{P}\!\left(X \ge \ln(K/S_0)\right)
+:=\mathbb{P}\left(X \ge \ln(K/S_0)\right)
 $$
 
 Standardizing $Z=X/(\sigma\sqrt{t})\sim\mathcal{N}(0,1)$ yields:
@@ -113,7 +113,7 @@ Then:
 $$
 p_{\text{model}}
 :=\mathbb{P}(S_T \ge K)
-:=1-\Phi\!\left(\frac{\ln(K/S_0)}{\sigma\sqrt{t}}\right)
+:=1-\Phi\left(\frac{\ln(K/S_0)}{\sigma\sqrt{t}}\right)
 :=\Phi(d_2)
 $$
 
@@ -133,7 +133,7 @@ Built in `kalshi_edge/market_state.py::build_market_state`:
 
 - **Spot**: Deribit index (`deribit_index_price`)
 - **Implied vol** ($\sigma_{\text{implied}}$): Deribit options, near-ATM median within a strike band controlled by `strategy.IV_BAND_PCT`
-- **Realized vol** ($\sigma_{\text{realized}}$): Coinbase BTC-USD 1-minute candles (last 61 closes), annualized by $\sqrt{\texttt{MINUTES\_PER\_YEAR}}$
+- **Realized vol** ($\sigma_{\text{realized}}$): Coinbase BTC-USD 1-minute candles (last 61 closes), annualized by $\sqrt{525{,}600}$.
 - **Blend rule** (`blend_vol`):
   - if $\sigma_{\text{implied}}\le 0$: use realized
   - if $\sigma_{\text{realized}}/\sigma_{\text{implied}} > 1.5$: 50/50
@@ -141,12 +141,12 @@ Built in `kalshi_edge/market_state.py::build_market_state`:
 
 #### Implied vol details (Deribit near-ATM median)
 
-In `deribit_atm_implied_vol`, “near-ATM” is defined by a symmetric strike band around spot controlled by `strategy.IV_BAND_PCT`:
+In `deribit_atm_implied_vol`, “near-ATM” is defined by a symmetric strike band around spot controlled by `strategy.IV_BAND_PCT`. Let $b$ be `IV_BAND_PCT` (in percent):
 
 $$
-\text{lo} = S_0\left(1 - \frac{\texttt{IV\_BAND\_PCT}}{100}\right)
+\text{lo} = S_0\left(1 - \frac{b}{100}\right)
 \qquad
-\text{hi} = S_0\left(1 + \frac{\texttt{IV\_BAND\_PCT}}{100}\right)
+\text{hi} = S_0\left(1 + \frac{b}{100}\right)
 $$
 
 The implementation filters option strikes to $[\text{lo},\text{hi}]$, groups by expiry, chooses a near expiry with enough samples, and takes the **median** IV for robustness.
@@ -156,7 +156,7 @@ The implementation filters option strikes to $[\text{lo},\text{hi}]$, groups by 
 `coinbase_realized_vol_1h` computes 1-minute log returns $r_i=\ln(C_i/C_{i-1})$, takes the population stdev $\sigma_{1m}$, then annualizes:
 
 $$
-\sigma_{\text{realized}} = \sigma_{1m}\sqrt{\texttt{MINUTES\_PER\_YEAR}}
+\sigma_{\text{realized}} = \sigma_{1m}\sqrt{525{,}600}
 $$
 
 #### Backtests (realized-only)
@@ -170,7 +170,7 @@ This quantity is a scale/intuition diagnostic: it summarizes the model-implied �
 Computed in `kalshi_edge/math_models.py::expected_one_sigma_move_pct`:
 
 $$
-\texttt{one\_sigma\_move\_pct} = \sigma_{\text{blend}}\sqrt{t}\cdot 100
+\text{one-sigma move (\%)} = \sigma_{\text{blend}}\sqrt{t}\cdot 100
 $$
 
 ### Mapping probability to trade decision (YES/NO in cents, fees, EV)
@@ -194,10 +194,10 @@ These proxy cents are what EV is computed against in the ladder table.
 
 #### Fee treatment (as implemented)
 
-The current code uses a flat per-contract fee `FEE_CENTS` (integer cents). EV and trader decisions treat the all-in entry cost as:
+The current code uses a flat per-contract fee `FEE_CENTS` (integer cents). Let $c$ be executable price in cents, and let $f$ be the fee in cents (`FEE_CENTS`). The all-in entry cost is:
 
 $$
-\text{entry\_cost} = \frac{\text{price\_cents} + \texttt{FEE\_CENTS}}{100}
+\text{entry cost} = \frac{c + f}{100}
 $$
 
 #### EV formulas (buy-only, dollars per contract)
@@ -207,10 +207,10 @@ Let $p_{\text{win}}$ be the side-specific win probability:
 - YES: $p_{\text{win}} = p_{\text{model}}$
 - NO: $p_{\text{win}} = 1-p_{\text{model}}$
 
-Then, with an executable price $c$ in cents:
+Then, with an executable price $c$ in cents and fee $f$ in cents:
 
 $$
-\mathrm{EV} = p_{\text{win}} - \frac{c + \texttt{FEE\_CENTS}}{100}
+\mathrm{EV} = p_{\text{win}} - \frac{c + f}{100}
 $$
 
 Live evaluator uses $c=\texttt{Ybuy}$ for YES and $c=\texttt{Nbuy}$ for NO.
