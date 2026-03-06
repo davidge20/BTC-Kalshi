@@ -218,6 +218,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# dashboard (local)
+.dashboard/
+
 # kalshi_edge runtime artifacts
 logs/
 pnl_out/

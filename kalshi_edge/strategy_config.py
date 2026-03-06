@@ -298,6 +298,13 @@ class BacktestConfig:
     CACHE_DIR: str = "data/cache"
     LOG_DIR: str = "backtests"
     DEBUG_HTTP: bool = False
+    # Optional: log per-minute ladder snapshots (near-spot strikes chosen each minute)
+    # Warning: can create very large JSONL files for long ranges / many events.
+    LOG_LADDER: bool = False
+    LOG_LADDER_EVERY_N: int = 5
+    # Optional: emit progress records into the backtest JSONL log.
+    LOG_PROGRESS: bool = True
+    LOG_PROGRESS_EVERY_N_EVENTS: int = 1
 
     def validate(self) -> None:
         if not isinstance(self.SERIES_TICKER, str) or not self.SERIES_TICKER.strip():
@@ -318,6 +325,10 @@ class BacktestConfig:
             raise ValueError("CACHE_DIR must be a non-empty string")
         if not isinstance(self.LOG_DIR, str) or not self.LOG_DIR.strip():
             raise ValueError("LOG_DIR must be a non-empty string")
+        if int(self.LOG_LADDER_EVERY_N) < 1:
+            raise ValueError("LOG_LADDER_EVERY_N must be >= 1")
+        if int(self.LOG_PROGRESS_EVERY_N_EVENTS) < 1:
+            raise ValueError("LOG_PROGRESS_EVERY_N_EVENTS must be >= 1")
 
         start = self.START_DATE
         end = self.END_DATE

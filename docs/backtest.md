@@ -140,8 +140,18 @@ Each run writes a JSONL log under `backtest.LOG_DIR` named like:
 Record types you’ll see in the file:
 
 - `record_type="entry"`: one line per simulated fill (minute timestamp, side, price, `p_yes`, `ev`, etc.)
+- `record_type="ladder"`: *(optional)* per-minute ladder snapshot near spot (see `backtest.LOG_LADDER`)
 - `record_type="event_summary"`: per-event trades/contracts/PnL/win_rate
 - `record_type="run_summary"`: run-wide totals + an embedded copy of the effective config
+
+#### Optional per-minute ladder snapshots
+
+If you want the dashboard to replay **per-minute ladder curves** (strike vs `p_yes` and implied probabilities), enable:
+
+- `backtest.LOG_LADDER=true`
+- `backtest.LOG_LADDER_EVERY_N=1` (log every minute) or higher to downsample
+
+Note: this can produce very large JSONL logs for long ranges / many events.
 
 ### Known limitations / next steps
 

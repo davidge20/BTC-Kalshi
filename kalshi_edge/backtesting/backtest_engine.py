@@ -320,15 +320,53 @@ def run_backtest(
         )
     if int(bt.MAX_EVENTS) > 0:
         events_raw = events_raw[: int(bt.MAX_EVENTS)]
+    total_events_planned = int(len(events_raw))
+    print(
+        f"[backtest] events planned: {total_events_planned} "
+        f"(source={'EVENTS' if events_cfg else 'kalshi_list'}, max_events={int(bt.MAX_EVENTS)})"
+    )
+
+    # Early progress signal so UIs can show activity before first event completes.
+    if bool(getattr(bt, "LOG_PROGRESS", True)):
+        _append_jsonl(
+            log_path,
+            {
+                "record_type": "progress",
+                "stage": "events_listed",
+                "ts": _iso_utc(int(datetime.now(timezone.utc).timestamp())),
+                "event": None,
+                "events_total": int(total_events_planned),
+                "events_scanned": 0,
+                "events_simulated": 0,
+                "simulated_this_event": False,
+            },
+        )
 
     coinbase_cache_path = cache.coinbase_candles_path("BTC-USD", start_ts, end_ts)
     coin_rows = cache.read_json_gz(coinbase_cache_path)
+    coin_cache_hit = isinstance(coin_rows, list)
     if not isinstance(coin_rows, list):
         coin_rows = fetch_coinbase_candles_1m(http=http, start_ts=start_ts, end_ts=end_ts, product="BTC-USD")
         cache.write_json_gz(coinbase_cache_path, coin_rows)
+    print(f"[backtest] coinbase candles: {'cache hit' if coin_cache_hit else 'fetched'} ({coinbase_cache_path})")
     close_by_ts = build_close_by_minute_ts(coin_rows)
     close_keys = sorted(close_by_ts.keys())
     close_vals = [float(close_by_ts[k]) for k in close_keys]
+
+    if bool(getattr(bt, "LOG_PROGRESS", True)):
+        _append_jsonl(
+            log_path,
+            {
+                "record_type": "progress",
+                "stage": "coinbase_loaded",
+                "ts": _iso_utc(int(datetime.now(timezone.utc).timestamp())),
+                "event": None,
+                "events_total": int(total_events_planned),
+                "events_scanned": 0,
+                "events_simulated": 0,
+                "simulated_this_event": False,
+            },
+        )
 
     def spot_at_or_before(ts: int) -> Optional[float]:
         idx = bisect.bisect_right(close_keys, int(ts)) - 1
@@ -360,39 +398,95 @@ def run_backtest(
         if not et:
             continue
         events_scanned += 1
+        _simulated_this_event = False
+        _t0 = datetime.now(timezone.utc)
 
-        mpath = cache.kalshi_markets_path(et)
-        market_rows = cache.read_json_gz(mpath)
-        if not isinstance(market_rows, list):
-            market_rows = list_markets_for_event(http=http, event_ticker=et, cutoff_dt=cutoff_dt)
-            cache.write_json_gz(mpath, market_rows)
+        # Emit a progress record *before* doing any heavy per-event work so UIs
+        # don't look "stuck" while we fetch/decompress markets/candles.
+        if bool(getattr(bt, "LOG_PROGRESS", True)):
+            _append_jsonl(
+                log_path,
+                {
+                    "record_type": "progress",
+                    "stage": "event_started",
+                    "ts": _iso_utc(int(datetime.now(timezone.utc).timestamp())),
+                    "event": et,
+                    "events_total": int(total_events_planned),
+                    "events_scanned": int(events_scanned),
+                    "events_simulated": int(events_simulated),
+                    "simulated_this_event": False,
+                },
+            )
 
-        metas = [m for m in (_market_meta_from_row(r, event_ticker=et) for r in market_rows) if m is not None]
-        if not metas:
-            continue
+        def _maybe_log_progress() -> None:
+            if not bool(getattr(bt, "LOG_PROGRESS", True)):
+                return
+            every = int(getattr(bt, "LOG_PROGRESS_EVERY_N_EVENTS", 1))
+            if every <= 1 or (int(events_scanned) % every == 0) or (int(events_scanned) >= int(total_events_planned)):
+                _append_jsonl(
+                    log_path,
+                    {
+                        "record_type": "progress",
+                        "stage": "event_done",
+                        "ts": _iso_utc(int(datetime.now(timezone.utc).timestamp())),
+                        "event": et,
+                        "events_total": int(total_events_planned),
+                        "events_scanned": int(events_scanned),
+                        "events_simulated": int(events_simulated),
+                        "simulated_this_event": bool(_simulated_this_event),
+                    },
+                )
 
-        close_ts = _event_close_ts(ev) or min(m.close_ts for m in metas)
-        if close_ts <= start_ts or close_ts > end_ts:
-            continue
+        try:
+            mpath = cache.kalshi_markets_path(et)
+            market_rows = cache.read_json_gz(mpath)
+            markets_cache_hit = isinstance(market_rows, list)
+            if not isinstance(market_rows, list):
+                market_rows = list_markets_for_event(http=http, event_ticker=et, cutoff_dt=cutoff_dt)
+                cache.write_json_gz(mpath, market_rows)
+            print(
+                f"[backtest] event {et}: markets={'cache hit' if markets_cache_hit else 'fetched'} "
+                f"(rows={len(market_rows) if isinstance(market_rows, list) else 0})"
+            )
 
-        if bt.ONLY_LAST_N_MINUTES is not None:
-            event_start_ts = max(start_ts, close_ts - int(bt.ONLY_LAST_N_MINUTES) * 60)
-        else:
-            # "today at Xpm" events are day-scoped; 24h lookback keeps runtime predictable.
-            event_start_ts = max(start_ts, close_ts - 24 * 60 * 60)
-        if event_start_ts >= close_ts:
-            continue
+            metas = [m for m in (_market_meta_from_row(r, event_ticker=et) for r in market_rows) if m is not None]
+            if not metas:
+                continue
 
-        candles_by_market: Dict[str, Dict[int, Candle]] = {}
-        live_tickers = [m.ticker for m in metas if m.close_ts >= cutoff_ts]
-        batched = fetch_batch_market_candles_1m(http, live_tickers, event_start_ts, close_ts)
+            close_ts = _event_close_ts(ev) or min(m.close_ts for m in metas)
+            if close_ts <= start_ts or close_ts > end_ts:
+                continue
 
-        for m in metas:
-            cpath = cache.kalshi_candles_path(m.ticker, event_start_ts, close_ts)
-            rows = cache.read_json_gz(cpath)
-            if not isinstance(rows, list):
-                rows = batched.get(m.ticker)
-                if rows is None:
+            if bt.ONLY_LAST_N_MINUTES is not None:
+                event_start_ts = max(start_ts, close_ts - int(bt.ONLY_LAST_N_MINUTES) * 60)
+            else:
+                # "today at Xpm" events are day-scoped; 24h lookback keeps runtime predictable.
+                event_start_ts = max(start_ts, close_ts - 24 * 60 * 60)
+            if event_start_ts >= close_ts:
+                continue
+
+            # IMPORTANT: Don't pre-load candles for every market in the event.
+            # Large ladder events can have hundreds of markets; preloading them all
+            # makes "fast knobs" (MAX_STRIKES/STEP_MINUTES/MAX_EVENTS) ineffective.
+            # Instead, load per-market candles lazily for only the strikes we evaluate.
+            candles_by_market: Dict[str, Dict[int, Candle]] = {}
+            candle_cache_hits = 0
+            candle_cache_misses = 0
+            candle_fetch_errors = 0
+
+            def _candles_for_market(m: MarketMeta) -> Dict[int, Candle]:
+                cached_map = candles_by_market.get(m.ticker)
+                if cached_map is not None:
+                    return cached_map
+
+                cpath = cache.kalshi_candles_path(m.ticker, event_start_ts, close_ts)
+                rows = cache.read_json_gz(cpath)
+                if isinstance(rows, list):
+                    nonlocal candle_cache_hits
+                    candle_cache_hits += 1
+                else:
+                    nonlocal candle_cache_misses
+                    candle_cache_misses += 1
                     try:
                         rows = fetch_market_candles_1m(
                             http=http,
@@ -402,202 +496,261 @@ def run_backtest(
                             use_historical=(m.close_ts < cutoff_ts),
                         )
                     except Exception as e:
+                        nonlocal candle_fetch_errors
+                        candle_fetch_errors += 1
                         # Keep backtest robust: skip market on fetch errors.
                         print(f"[backtest] warning: candles unavailable for {m.ticker}: {e}")
                         rows = []
-                cache.write_json_gz(cpath, rows)
-            cmap: Dict[int, Candle] = {}
-            for r in rows:
-                if not isinstance(r, dict):
-                    continue
-                try:
-                    ts = int(r["ts"])
-                except Exception:
-                    continue
-                cmap[ts] = Candle(
-                    ts=ts,
-                    yes_bid_cents=dollars_to_cents(r.get("yes_bid_cents")),
-                    yes_ask_cents=dollars_to_cents(r.get("yes_ask_cents")),
-                )
-            if cmap:
+                    cache.write_json_gz(cpath, rows)
+
+                cmap: Dict[int, Candle] = {}
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    try:
+                        ts = int(r["ts"])
+                    except Exception:
+                        continue
+                    cmap[ts] = Candle(
+                        ts=ts,
+                        yes_bid_cents=dollars_to_cents(r.get("yes_bid_cents")),
+                        yes_ask_cents=dollars_to_cents(r.get("yes_ask_cents")),
+                    )
                 candles_by_market[m.ticker] = cmap
+                return cmap
 
-        if not candles_by_market:
-            continue
-        events_simulated += 1
+            events_simulated += 1
+            _simulated_this_event = True
 
-        event_fill_start_idx = len(all_fills)
-        step_s = int(bt.STEP_MINUTES) * 60
-        t = int(math.ceil(event_start_ts / step_s) * step_s)
-        while t < close_ts:
-            minutes_left = max(0.0, float(close_ts - t) / 60.0)
-            if minutes_left <= 0.0:
-                break
-
-            spot = spot_at_or_before(t)
-            if spot is None:
-                t += step_s
-                continue
-            sigma = realized_vol_at(t)
-            if sigma is None:
-                t += step_s
-                continue
-
-            chosen = _pick_markets(metas, spot=spot, max_strikes=int(bt.MAX_STRIKES), band_pct=float(bt.BAND_PCT))
-            cands: List[_Candidate] = []
-            for m in chosen:
-                c = candles_by_market.get(m.ticker, {}).get(t)
-                if c is None:
-                    continue
-                ybid, yask = c.yes_bid_cents, c.yes_ask_cents
-                if yask is None and ybid is None:
-                    continue
-                spread = _quote_spread(ybid, yask)
-                # Skip crossed/inverted quotes from sparse candle snapshots.
-                if spread is not None and int(spread) < 0:
-                    continue
-                if spread is not None and int(cfg.SPREAD_MAX_CENTS) >= 0 and int(spread) > int(cfg.SPREAD_MAX_CENTS):
-                    continue
-
-                p_yes = clamp01(lognormal_prob_above(float(spot), float(m.strike), float(sigma), float(minutes_left)))
-                nbid, nask = derive_no_quotes(ybid, yask)
-
-                best: Optional[_Candidate] = None
-                if _valid_taker_price_cents(yask):
-                    max_yes = max_acceptable_price_cents(
-                        p_win=p_yes,
-                        min_ev=float(cfg.MIN_EV),
-                        fee_buffer_cents=int(cfg.FEE_CENTS),
-                    )
-                    if int(yask) <= int(max_yes):
-                        ev_yes = edge_at_price(p_win=p_yes, price_cents=int(yask), fee_cents=int(cfg.FEE_CENTS))
-                        best = _Candidate(
-                            event_ticker=et,
-                            market_ticker=m.ticker,
-                            strike=m.strike,
-                            side="yes",
-                            price_cents=int(yask),
-                            fee_cents=int(cfg.FEE_CENTS),
-                            p_yes=float(p_yes),
-                            edge_pp=float(ev_yes),
-                            spread=spread,
-                            ts=t,
-                        )
-                if _valid_taker_price_cents(nask):
-                    p_no = 1.0 - p_yes
-                    max_no = max_acceptable_price_cents(
-                        p_win=p_no,
-                        min_ev=float(cfg.MIN_EV),
-                        fee_buffer_cents=int(cfg.FEE_CENTS),
-                    )
-                    if int(nask) <= int(max_no):
-                        ev_no = edge_at_price(p_win=p_no, price_cents=int(nask), fee_cents=int(cfg.FEE_CENTS))
-                        cand_no = _Candidate(
-                            event_ticker=et,
-                            market_ticker=m.ticker,
-                            strike=m.strike,
-                            side="no",
-                            price_cents=int(nask),
-                            fee_cents=int(cfg.FEE_CENTS),
-                            p_yes=float(p_yes),
-                            edge_pp=float(ev_no),
-                            spread=spread,
-                            ts=t,
-                        )
-                        if best is None or float(cand_no.edge_pp) > float(best.edge_pp):
-                            best = cand_no
-                if best is not None:
-                    cands.append(best)
-
-            cands.sort(key=lambda x: float(x.edge_pp), reverse=True)
-            entries_this_tick = 0
-            for cand in cands:
-                if entries_this_tick >= int(cfg.MAX_ENTRIES_PER_TICK):
+            event_fill_start_idx = len(all_fills)
+            ticks_evaluated = 0
+            step_s = int(bt.STEP_MINUTES) * 60
+            t0 = int(math.ceil(event_start_ts / step_s) * step_s)
+            total_ticks = max(1, int(math.ceil(float(close_ts - t0) / float(step_s))))
+            print(
+                f"[backtest] event {et}: simulate start={_iso_utc(event_start_ts)} end={_iso_utc(close_ts)} "
+                f"(step_minutes={int(bt.STEP_MINUTES)}, ticks~{total_ticks}, max_strikes={int(bt.MAX_STRIKES)})"
+            )
+            for tick_idx in range(int(total_ticks)):
+                t = int(t0 + tick_idx * step_s)
+                if t >= int(close_ts):
                     break
-                pos = positions.get(cand.market_ticker)
-                current = int(pos.total_count) if pos else 0
-                existing_side = pos.side if pos else None
-                if existing_side is not None and existing_side != cand.side:
+                ticks_evaluated = int(tick_idx) + 1
+                if ticks_evaluated == 1 or (ticks_evaluated % 200 == 0):
+                    fills_so_far = len([f for f in all_fills[event_fill_start_idx:] if f.event_ticker == et])
+                    print(
+                        f"[backtest] event {et}: tick {ticks_evaluated}/{total_ticks} ts={_iso_utc(t)} "
+                        f"(markets_cached={len(candles_by_market)}, fills_so_far={fills_so_far}, "
+                        f"candle_cache_hit={candle_cache_hits}, candle_fetched={candle_cache_misses}, candle_fetch_errors={candle_fetch_errors})"
+                    )
+                minutes_left = max(0.0, float(close_ts - t) / 60.0)
+                if minutes_left <= 0.0:
+                    break
+
+                spot = spot_at_or_before(t)
+                if spot is None:
                     continue
-                if current > 0 and bool(cfg.DEDUPE_MARKETS):
+                sigma = realized_vol_at(t)
+                if sigma is None:
                     continue
-                if current <= 0:
-                    if float(cand.edge_pp) < float(cfg.MIN_EV):
+
+                chosen = _pick_markets(metas, spot=spot, max_strikes=int(bt.MAX_STRIKES), band_pct=float(bt.BAND_PCT))
+                cands: List[_Candidate] = []
+                ladder_rows: List[Dict[str, Any]] = []
+                for m in chosen:
+                    c = _candles_for_market(m).get(t)
+                    if c is None:
                         continue
-                else:
-                    if not bool(cfg.ALLOW_SCALE_IN):
+                    ybid, yask = c.yes_bid_cents, c.yes_ask_cents
+                    if yask is None and ybid is None:
                         continue
-                    if float(cand.edge_pp) < float(cfg.SCALE_IN_MIN_EV):
+                    spread = _quote_spread(ybid, yask)
+                    # Skip crossed/inverted quotes from sparse candle snapshots.
+                    if spread is not None and int(spread) < 0:
                         continue
-                    if pos is not None and pos.last_fill_ts is not None:
-                        if (cand.ts - int(pos.last_fill_ts)) < int(cfg.SCALE_IN_COOLDOWN_SECONDS):
+                    if spread is not None and int(cfg.SPREAD_MAX_CENTS) >= 0 and int(spread) > int(cfg.SPREAD_MAX_CENTS):
+                        continue
+
+                    p_yes = clamp01(lognormal_prob_above(float(spot), float(m.strike), float(sigma), float(minutes_left)))
+                    nbid, nask = derive_no_quotes(ybid, yask)
+
+                    # Optional ladder logging (YES side only; enough for implied_q_yes vs p_model curves)
+                    if bool(getattr(bt, "LOG_LADDER", False)):
+                        px = yask if yask is not None else ybid
+                        implied_q_yes = (float(px) / 100.0) if px is not None else None
+                        ev_yes = edge_at_price(p_win=float(p_yes), price_cents=int(px), fee_cents=int(cfg.FEE_CENTS)) if px is not None else None
+                        ladder_rows.append(
+                            {
+                                "market_ticker": m.ticker,
+                                "strike": float(m.strike),
+                                "subtitle": str(m.subtitle),
+                                "yes_bid_cents": int(ybid) if ybid is not None else None,
+                                "yes_ask_cents": int(yask) if yask is not None else None,
+                                "no_bid_cents": int(nbid) if nbid is not None else None,
+                                "no_ask_cents": int(nask) if nask is not None else None,
+                                "spread_cents": int(spread) if spread is not None else None,
+                                "price_cents": int(px) if px is not None else None,
+                                "implied_q_yes": float(implied_q_yes) if implied_q_yes is not None else None,
+                                "p_yes": float(p_yes),
+                                "ev_yes": float(ev_yes) if ev_yes is not None else None,
+                            }
+                        )
+
+                    best: Optional[_Candidate] = None
+                    if _valid_taker_price_cents(yask):
+                        max_yes = max_acceptable_price_cents(
+                            p_win=p_yes,
+                            min_ev=float(cfg.MIN_EV),
+                            fee_buffer_cents=int(cfg.FEE_CENTS),
+                        )
+                        if int(yask) <= int(max_yes):
+                            ev_yes = edge_at_price(p_win=p_yes, price_cents=int(yask), fee_cents=int(cfg.FEE_CENTS))
+                            best = _Candidate(
+                                event_ticker=et,
+                                market_ticker=m.ticker,
+                                strike=m.strike,
+                                side="yes",
+                                price_cents=int(yask),
+                                fee_cents=int(cfg.FEE_CENTS),
+                                p_yes=float(p_yes),
+                                edge_pp=float(ev_yes),
+                                spread=spread,
+                                ts=t,
+                            )
+                    if _valid_taker_price_cents(nask):
+                        p_no = 1.0 - p_yes
+                        max_no = max_acceptable_price_cents(
+                            p_win=p_no,
+                            min_ev=float(cfg.MIN_EV),
+                            fee_buffer_cents=int(cfg.FEE_CENTS),
+                        )
+                        if int(nask) <= int(max_no):
+                            ev_no = edge_at_price(p_win=p_no, price_cents=int(nask), fee_cents=int(cfg.FEE_CENTS))
+                            cand_no = _Candidate(
+                                event_ticker=et,
+                                market_ticker=m.ticker,
+                                strike=m.strike,
+                                side="no",
+                                price_cents=int(nask),
+                                fee_cents=int(cfg.FEE_CENTS),
+                                p_yes=float(p_yes),
+                                edge_pp=float(ev_no),
+                                spread=spread,
+                                ts=t,
+                            )
+                            if best is None or float(cand_no.edge_pp) > float(best.edge_pp):
+                                best = cand_no
+                    if best is not None:
+                        cands.append(best)
+
+                if bool(getattr(bt, "LOG_LADDER", False)) and ladder_rows:
+                    every = int(getattr(bt, "LOG_LADDER_EVERY_N", 5))
+                    if every <= 1 or ((t // step_s) % every == 0):
+                        _append_jsonl(
+                            log_path,
+                            {
+                                "record_type": "ladder",
+                                "ts": _iso_utc(t),
+                                "event": et,
+                                "minutes_left": float(minutes_left),
+                                "spot": float(spot),
+                                "sigma": float(sigma),
+                                "fee_cents": int(cfg.FEE_CENTS),
+                                "max_strikes": int(bt.MAX_STRIKES),
+                                "rows": ladder_rows,
+                            },
+                        )
+
+                cands.sort(key=lambda x: float(x.edge_pp), reverse=True)
+                entries_this_tick = 0
+                for cand in cands:
+                    if entries_this_tick >= int(cfg.MAX_ENTRIES_PER_TICK):
+                        break
+                    pos = positions.get(cand.market_ticker)
+                    current = int(pos.total_count) if pos else 0
+                    existing_side = pos.side if pos else None
+                    if existing_side is not None and existing_side != cand.side:
+                        continue
+                    if current > 0 and bool(cfg.DEDUPE_MARKETS):
+                        continue
+                    if current <= 0:
+                        if float(cand.edge_pp) < float(cfg.MIN_EV):
                             continue
+                    else:
+                        if not bool(cfg.ALLOW_SCALE_IN):
+                            continue
+                        if float(cand.edge_pp) < float(cfg.SCALE_IN_MIN_EV):
+                            continue
+                        if pos is not None and pos.last_fill_ts is not None:
+                            if (cand.ts - int(pos.last_fill_ts)) < int(cfg.SCALE_IN_COOLDOWN_SECONDS):
+                                continue
 
-                target = min(int(cfg.MAX_CONTRACTS_PER_MARKET), current + int(cfg.ORDER_SIZE))
-                add_count = int(target - current)
-                if add_count <= 0:
-                    continue
+                    target = min(int(cfg.MAX_CONTRACTS_PER_MARKET), current + int(cfg.ORDER_SIZE))
+                    add_count = int(target - current)
+                    if add_count <= 0:
+                        continue
 
-                add_cost = float(add_count) * (float(cand.price_cents + cand.fee_cents) / 100.0)
-                is_new_market = current <= 0
-                if is_new_market and int(event_positions.get(et, 0)) >= int(cfg.MAX_POSITIONS_PER_EVENT):
-                    continue
-                if float(event_cost.get(et, 0.0)) + add_cost > float(cfg.MAX_COST_PER_EVENT):
-                    continue
-                if float(market_cost.get(cand.market_ticker, 0.0)) + add_cost > float(cfg.MAX_COST_PER_MARKET):
-                    continue
+                    add_cost = float(add_count) * (float(cand.price_cents + cand.fee_cents) / 100.0)
+                    is_new_market = current <= 0
+                    if is_new_market and int(event_positions.get(et, 0)) >= int(cfg.MAX_POSITIONS_PER_EVENT):
+                        continue
+                    if float(event_cost.get(et, 0.0)) + add_cost > float(cfg.MAX_COST_PER_EVENT):
+                        continue
+                    if float(market_cost.get(cand.market_ticker, 0.0)) + add_cost > float(cfg.MAX_COST_PER_MARKET):
+                        continue
 
-                if pos is None:
-                    pos = Position(
+                    if pos is None:
+                        pos = Position(
+                            event_ticker=et,
+                            market_ticker=cand.market_ticker,
+                            side=cand.side,
+                        )
+                        positions[cand.market_ticker] = pos
+
+                    fill = Fill(
+                        ts=cand.ts,
                         event_ticker=et,
                         market_ticker=cand.market_ticker,
                         side=cand.side,
+                        contracts=add_count,
+                        entry_price_cents=int(cand.price_cents),
+                        fee_cents=int(cand.fee_cents),
+                        p_yes=float(cand.p_yes),
+                        p_win=float(cand.p_yes if cand.side == "yes" else (1.0 - cand.p_yes)),
+                        ev=float(cand.edge_pp),
+                        spread=cand.spread,
                     )
-                    positions[cand.market_ticker] = pos
+                    all_fills.append(fill)
+                    pos.fills.append(fill)
+                    pos.total_count += add_count
+                    pos.total_cost_dollars += add_cost
+                    pos.total_fee_dollars += float(add_count) * (float(cand.fee_cents) / 100.0)
+                    pos.last_fill_ts = cand.ts
+                    market_cost[cand.market_ticker] = float(market_cost.get(cand.market_ticker, 0.0) + add_cost)
+                    event_cost[et] = float(event_cost.get(et, 0.0) + add_cost)
+                    if is_new_market:
+                        event_positions[et] = int(event_positions.get(et, 0) + 1)
+                    entries_this_tick += 1
 
-                fill = Fill(
-                    ts=cand.ts,
-                    event_ticker=et,
-                    market_ticker=cand.market_ticker,
-                    side=cand.side,
-                    contracts=add_count,
-                    entry_price_cents=int(cand.price_cents),
-                    fee_cents=int(cand.fee_cents),
-                    p_yes=float(cand.p_yes),
-                    p_win=float(cand.p_yes if cand.side == "yes" else (1.0 - cand.p_yes)),
-                    ev=float(cand.edge_pp),
-                    spread=cand.spread,
-                )
-                all_fills.append(fill)
-                pos.fills.append(fill)
-                pos.total_count += add_count
-                pos.total_cost_dollars += add_cost
-                pos.total_fee_dollars += float(add_count) * (float(cand.fee_cents) / 100.0)
-                pos.last_fill_ts = cand.ts
-                market_cost[cand.market_ticker] = float(market_cost.get(cand.market_ticker, 0.0) + add_cost)
-                event_cost[et] = float(event_cost.get(et, 0.0) + add_cost)
-                if is_new_market:
-                    event_positions[et] = int(event_positions.get(et, 0) + 1)
-                entries_this_tick += 1
-
-                _append_jsonl(
-                    log_path,
-                    {
-                        "record_type": "entry",
-                        "ts": _iso_utc(fill.ts),
-                        "event": fill.event_ticker,
-                        "market_ticker": fill.market_ticker,
-                        "side": fill.side,
-                        "contracts": int(fill.contracts),
-                        "entry_price_cents": int(fill.entry_price_cents),
-                        "fee_cents": int(fill.fee_cents),
-                        "p_yes": float(fill.p_yes),
-                        "p_win": float(fill.p_win),
-                        "ev": float(fill.ev),
-                        "spread": int(fill.spread) if fill.spread is not None else None,
-                    },
-                )
-            t += step_s
+                    _append_jsonl(
+                        log_path,
+                        {
+                            "record_type": "entry",
+                            "ts": _iso_utc(fill.ts),
+                            "event": fill.event_ticker,
+                            "market_ticker": fill.market_ticker,
+                            "side": fill.side,
+                            "contracts": int(fill.contracts),
+                            "entry_price_cents": int(fill.entry_price_cents),
+                            "fee_cents": int(fill.fee_cents),
+                            "p_yes": float(fill.p_yes),
+                            "p_win": float(fill.p_win),
+                            "ev": float(fill.ev),
+                            "spread": int(fill.spread) if fill.spread is not None else None,
+                        },
+                    )
+        finally:
+            _maybe_log_progress()
 
         event_fills = [f for f in all_fills[event_fill_start_idx:] if f.event_ticker == et]
         pnl = 0.0
@@ -647,6 +800,12 @@ def run_backtest(
                 "pnl": float(er.pnl),
                 "win_rate": float(er.win_rate),
             },
+        )
+        dt_s = (datetime.now(timezone.utc) - _t0).total_seconds()
+        print(
+            f"[backtest] event {et}: done in {dt_s:.1f}s "
+            f"(ticks={ticks_evaluated}, fills={len(event_fills)}, "
+            f"candle_cache_hit={candle_cache_hits}, candle_fetched={candle_cache_misses}, candle_fetch_errors={candle_fetch_errors})"
         )
 
     total_pnl = float(sum(float(e.pnl) for e in per_event_results))

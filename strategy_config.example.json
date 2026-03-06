@@ -55,6 +55,8 @@
     "ONLY_LAST_N_MINUTES": null,
     "CACHE_DIR": "data/cache",
     "LOG_DIR": "backtests",
-    "DEBUG_HTTP": false
+    "DEBUG_HTTP": false,
+    "LOG_LADDER": false,
+    "LOG_LADDER_EVERY_N": 5
   }
 }
