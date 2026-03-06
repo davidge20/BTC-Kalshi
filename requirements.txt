@@ -1,2 +1,6 @@
 requests
 cryptography
+streamlit
+streamlit-autorefresh
+pandas
+plotly

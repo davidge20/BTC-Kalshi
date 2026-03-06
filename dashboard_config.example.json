@@ -1,0 +1,8 @@
+{
+  "db_path": ".dashboard/kalshi_edge_dashboard.sqlite",
+  "log_path": null,
+  "logs_dir": "logs",
+  "refresh_seconds": 5.0,
+  "timezone": "UTC"
+}
+

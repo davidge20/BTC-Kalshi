@@ -1,0 +1,10 @@
+[server]
+# Streamlit automatically reruns on file changes by default. In this repo, backtests
+# and ingestion update `.dashboard/` (SQLite + logs) which can cause confusing
+# "File change" reruns even when the UI auto-refresh toggle is off.
+runOnSave = false
+
+# Even if runOnSave is enabled in a different config (e.g. global), make sure
+# dashboard artifacts don't trigger reruns.
+folderWatchBlacklist = [".dashboard", "dashboard/__pycache__", "**/__pycache__"]
+
