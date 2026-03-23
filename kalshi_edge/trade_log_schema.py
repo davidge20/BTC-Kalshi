@@ -26,12 +26,15 @@ EVENT_SCHEMAS: Dict[str, EventSchema] = {
     # --- lifecycle ---
     "bot_start": EventSchema(
         required_keys=[
+            "schema",
+            "state_file",
+            "trade_log_file",
+        ],
+        optional_keys=[
             "run_id",
             "strategy_name",
             "strategy_schema_version",
             "config_hash",
-        ],
-        optional_keys=[
             "config",
             "config_path",
             "git_commit",
@@ -39,26 +42,26 @@ EVENT_SCHEMAS: Dict[str, EventSchema] = {
             "paper",
             "live",
             "subaccount",
-            "trade_log_file",
-            "state_file",
+            "full_config_on_start",
         ],
     ),
     "bot_shutdown": EventSchema(
         required_keys=[
+            "schema",
+        ],
+        optional_keys=[
             "run_id",
             "strategy_name",
             "strategy_schema_version",
-        ],
-        optional_keys=[
             "event_ticker",
             "minutes_left",
             "spot",
             "notes",
-            "open",
             "positions_count_all",
             "total_cost_all",
             "open_positions",
             "open_orders",
+            "active_order_by_market",
         ],
     ),
     # --- execution ---

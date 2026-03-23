@@ -16,6 +16,8 @@ def _fmt_pct(x: float) -> str:
 def print_backtest_report(summary: BacktestSummary, top_n_events: int = 10) -> None:
     print("=== Backtest Summary ===")
     print(f"series:            {summary.series_ticker}")
+    print(f"vol model:         regression (DVOL+RV) > GARCH(1,1) > trailing RV")
+    print(f"fill model:        taker-only (immediate fill at ask)")
     print(f"events scanned:    {summary.events_scanned}")
     print(f"events simulated:  {summary.events_simulated}")
     print(f"trades:            {summary.trades}")

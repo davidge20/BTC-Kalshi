@@ -3,9 +3,11 @@ market_state.py — build MarketState from external BTC venues.
 
 Gathers:
 - Spot price (Deribit index)
+- Deribit DVOL index (forward-looking implied vol)
 - Implied volatility estimate (Deribit options, near ATM)
 - Realized short-term volatility (Coinbase 1-min candles)
-- Blended vol (implied + realized) -> sigma_blend
+- GARCH(1,1) forecast volatility
+- Regression-adjusted sigma (encompassing DVOL + RV blend)
 - Confidence label and expected 1-sigma move over time remaining
 
 This module is intentionally independent from Kalshi — it only talks to
@@ -14,16 +16,22 @@ Deribit and Coinbase to build inputs for the probability model.
 
 from __future__ import annotations
 
+import logging
 import math
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 from kalshi_edge.constants import DERIBIT, COINBASE, MINUTES_PER_YEAR
 from kalshi_edge.http_client import HttpClient
 from kalshi_edge.math_models import expected_one_sigma_move_pct
 from kalshi_edge.util.time import utc_now  # canonical source
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,12 +45,43 @@ class MarketState:
     confidence: str
     one_sigma_move_pct: float
     note: str
+    sigma_garch: float = 0.0
+    dvol_current: float = 0.0
+    sigma_adjusted: float = 0.0
 
 
 def deribit_index_price(http: HttpClient, index_name: str = "btc_usd") -> float:
     data = http.get_json(f"{DERIBIT}/public/get_index_price", params={"index_name": index_name})
     px = float(data["result"]["index_price"])
     return px
+
+
+def fetch_deribit_dvol(http: HttpClient, currency: str = "BTC") -> float:
+    """
+    Fetch the current Deribit DVOL index as an annualized decimal.
+
+    DVOL is reported as a percentage (e.g. 60 ⇒ 60% annual vol);
+    we normalize to decimal (0.60).
+    """
+    now_ms = int(utc_now().timestamp() * 1000)
+    start_ms = now_ms - 7_200_000  # 2 h lookback to guarantee ≥1 point
+
+    data = http.get_json(
+        f"{DERIBIT}/public/get_volatility_index_data",
+        params={
+            "currency": currency,
+            "start_timestamp": start_ms,
+            "end_timestamp": now_ms,
+            "resolution": 60,
+        },
+    )
+    rows = data.get("result", {}).get("data", [])
+    if not rows:
+        raise RuntimeError("No DVOL data returned from Deribit")
+
+    latest = rows[-1]
+    dvol_raw = float(latest[4])  # close value
+    return dvol_raw / 100.0
 
 
 def normalize_mark_iv(x: Any) -> Optional[float]:
@@ -135,27 +174,57 @@ def deribit_atm_implied_vol(http: HttpClient, spot: float, band_pct: float = 3.0
     return med0, note
 
 
+def fetch_coinbase_1min_closes(http: HttpClient, product: str = "BTC-USD") -> List[float]:
+    """
+    Fetch up to 300 of the most recent 1-minute candles from Coinbase.
+
+    Returns close prices sorted oldest → newest.
+    """
+    candles = http.get_json(
+        f"{COINBASE}/products/{product}/candles",
+        params={"granularity": 60},
+    )
+    if not isinstance(candles, list) or len(candles) < 2:
+        raise RuntimeError(
+            f"Coinbase candles insufficient: got {len(candles) if isinstance(candles, list) else 0}"
+        )
+    candles = sorted(candles, key=lambda x: x[0])
+    return [float(c[4]) for c in candles]
+
+
+def log_returns_from_closes(closes: List[float]) -> pd.Series:
+    """Compute 1-minute log returns from an ordered list of closes."""
+    arr = np.array(closes)
+    return pd.Series(np.log(arr[1:] / arr[:-1]))
+
+
+def realized_vol_from_returns(returns: pd.Series, window: int = 60) -> float:
+    """
+    Annualized realized vol from the trailing *window* 1-minute returns.
+
+    Uses population stdev and annualizes via sqrt(minutes_per_year).
+    """
+    tail = returns.iloc[-window:]
+    if len(tail) < 2:
+        return 0.0
+    stdev = float(tail.std(ddof=0))
+    return stdev * math.sqrt(MINUTES_PER_YEAR)
+
+
 def coinbase_realized_vol_1h(http: HttpClient, product: str = "BTC-USD", minutes: int = 61) -> float:
     """
     Fetch last N 1-minute candles and compute annualized realized vol.
 
-    Steps:
-      - compute 1-minute log returns
-      - take stdev
-      - annualize by sqrt(minutes/year)
+    Kept for backward compatibility.  Prefer fetch_coinbase_1min_closes()
+    + realized_vol_from_returns() in new code to avoid double-fetching.
     """
-    candles = http.get_json(f"{COINBASE}/products/{product}/candles", params={"granularity": 60})
-    if not isinstance(candles, list) or len(candles) < minutes:
+    closes = fetch_coinbase_1min_closes(http, product)
+    if len(closes) < minutes:
         raise RuntimeError("Coinbase candles insufficient.")
-
-    candles = sorted(candles, key=lambda x: x[0])
-    closes = [float(c[4]) for c in candles[-minutes:]]
-
+    closes = closes[-minutes:]
     rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
     stdev = statistics.pstdev(rets) if len(rets) > 1 else 0.0
-
-    vol_ann = stdev * math.sqrt(MINUTES_PER_YEAR)
-    return vol_ann
+    return stdev * math.sqrt(MINUTES_PER_YEAR)
 
 
 def blend_vol(implied: float, realized: float) -> Tuple[float, str]:
@@ -186,21 +255,90 @@ def confidence_label(implied: float, realized: float) -> str:
     return "Low"
 
 
-def build_market_state(http: HttpClient, minutes_left: float, iv_band_pct: float = 3.0) -> MarketState:
+def build_market_state(
+    http: HttpClient,
+    minutes_left: float,
+    iv_band_pct: float = 3.0,
+    vol_model: object | None = None,
+) -> MarketState:
     """
     Compute MarketState given minutes_left until Kalshi close.
+
+    Volatility priority:
+      1. Encompassing Regression (adjusted_sigma from DVOL + RV)  ← new
+      2. GARCH(1,1) forecast from Coinbase 1-min returns
+      3. Heuristic IV/RV blend                                    (fallback)
+
+    Parameters
+    ----------
+    vol_model : VolatilityRegression | None
+        A fitted :class:`~kalshi_edge.vol_regression.VolatilityRegression`.
+        When provided (and fitted), its prediction becomes the primary sigma.
     """
+    from kalshi_edge.garch import forecast_garch_volatility
+
     ts = utc_now()
 
     spot = deribit_index_price(http, "btc_usd")
-    sigma_imp, note = deribit_atm_implied_vol(http, spot, band_pct=iv_band_pct)
-    sigma_real = coinbase_realized_vol_1h(http, "BTC-USD", minutes=61)
 
-    sigma_bl, blend_note = blend_vol(sigma_imp, sigma_real)
+    # --- Deribit DVOL index ---
+    dvol = 0.0
+    dvol_note = ""
+    try:
+        dvol = fetch_deribit_dvol(http)
+        dvol_note = f"dvol={dvol*100:.1f}%"
+    except Exception as e:
+        _log.warning("Deribit DVOL fetch failed (%s)", e)
+        dvol_note = f"dvol_failed: {e}"
+
+    # --- Deribit IV (kept for diagnostics) ---
+    try:
+        sigma_imp, iv_note = deribit_atm_implied_vol(http, spot, band_pct=iv_band_pct)
+    except Exception as e:
+        _log.warning("Deribit IV fetch failed (%s); continuing without IV", e)
+        sigma_imp = 0.0
+        iv_note = f"iv_fetch_failed: {e}"
+
+    # --- Coinbase: fetch once, derive both RV and GARCH ---
+    closes = fetch_coinbase_1min_closes(http, "BTC-USD")
+    returns = log_returns_from_closes(closes)
+    sigma_real = realized_vol_from_returns(returns, window=60)
+
+    # --- GARCH(1,1) forecast ---
+    sigma_garch = 0.0
+    garch_note = ""
+    try:
+        sigma_garch, garch_note = forecast_garch_volatility(returns)
+    except Exception as e:
+        _log.warning("GARCH forecast failed (%s); falling back", e)
+        garch_note = f"garch_failed: {e}"
+
+    # --- Encompassing Regression (primary when available) ---
+    sigma_adj = 0.0
+    regression_note = ""
+    if vol_model is not None and getattr(vol_model, "is_fitted", False):
+        try:
+            sigma_adj = vol_model.predict(dvol, sigma_real)
+            regression_note = f"regression σ_adj={sigma_adj*100:.1f}%"
+        except Exception as e:
+            _log.warning("Regression prediction failed (%s); falling back", e)
+            regression_note = f"regression_failed: {e}"
+
+    # --- Choose primary sigma ---
+    if sigma_adj > 0:
+        sigma_primary = sigma_adj
+        blend_note = f"primary=regression; {regression_note}"
+    elif sigma_garch > 0:
+        sigma_primary = sigma_garch
+        blend_note = f"primary=garch; {garch_note}"
+    else:
+        sigma_bl, heuristic_note = blend_vol(sigma_imp, sigma_real)
+        sigma_primary = sigma_bl
+        blend_note = f"primary=blend_fallback; {heuristic_note}"
+
     conf = confidence_label(sigma_imp, sigma_real)
-    one_sigma = expected_one_sigma_move_pct(sigma_bl, minutes_left)
-
-    note2 = f"{note}; {blend_note}"
+    one_sigma = expected_one_sigma_move_pct(sigma_primary, minutes_left)
+    full_note = f"{dvol_note}; {iv_note}; {blend_note}"
 
     return MarketState(
         ts_utc=ts,
@@ -208,8 +346,11 @@ def build_market_state(http: HttpClient, minutes_left: float, iv_band_pct: float
         spot=spot,
         sigma_implied=sigma_imp,
         sigma_realized=sigma_real,
-        sigma_blend=sigma_bl,
+        sigma_blend=sigma_primary,
         confidence=conf,
         one_sigma_move_pct=one_sigma,
-        note=note2,
+        note=full_note,
+        sigma_garch=sigma_garch,
+        dvol_current=dvol,
+        sigma_adjusted=sigma_adj,
     )

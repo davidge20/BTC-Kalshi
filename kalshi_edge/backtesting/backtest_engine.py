@@ -1,11 +1,16 @@
 """
 Minute-cadence backtest engine for Kalshi BTC ladder events.
+
+Volatility hierarchy (matches live trader):
+  1. GARCH(1,1) on trailing Coinbase 1-min returns  (primary)
+  2. Trailing 60-min realized vol                    (fallback)
 """
 
 from __future__ import annotations
 
 import bisect
 import json
+import logging
 import math
 import os
 import statistics
@@ -27,6 +32,8 @@ from kalshi_edge.data.kalshi.models import market_strike_from_floor
 from kalshi_edge.math_models import clamp01, lognormal_prob_above
 from kalshi_edge.strategy_config import BacktestConfig, StrategyConfig, config_to_dict
 from kalshi_edge.util.time import parse_iso8601
+
+_log = logging.getLogger(__name__)
 
 
 def dollars_to_cents(raw: Any) -> Optional[int]:
@@ -128,6 +135,8 @@ class Fill:
     p_win: float
     ev: float
     spread: Optional[int]
+    sigma: float = 0.0
+    vol_source: str = ""
 
 
 @dataclass
@@ -321,14 +330,78 @@ def run_backtest(
     if int(bt.MAX_EVENTS) > 0:
         events_raw = events_raw[: int(bt.MAX_EVENTS)]
 
-    coinbase_cache_path = cache.coinbase_candles_path("BTC-USD", start_ts, end_ts)
+    # Extend Coinbase fetch backwards to cover regression + GARCH warm-up.
+    _REGRESSION_LOOKBACK_HOURS = 168
+    _coinbase_warmup_s = (_REGRESSION_LOOKBACK_HOURS + 2) * 3600
+    coin_start_ts = start_ts - _coinbase_warmup_s
+    coinbase_cache_path = cache.coinbase_candles_path("BTC-USD", coin_start_ts, end_ts)
     coin_rows = cache.read_json_gz(coinbase_cache_path)
     if not isinstance(coin_rows, list):
-        coin_rows = fetch_coinbase_candles_1m(http=http, start_ts=start_ts, end_ts=end_ts, product="BTC-USD")
+        coin_rows = fetch_coinbase_candles_1m(http=http, start_ts=coin_start_ts, end_ts=end_ts, product="BTC-USD")
         cache.write_json_gz(coinbase_cache_path, coin_rows)
     close_by_ts = build_close_by_minute_ts(coin_rows)
     close_keys = sorted(close_by_ts.keys())
     close_vals = [float(close_by_ts[k]) for k in close_keys]
+
+    # -- Log returns for GARCH (built once, reused across all events) --------
+    ret_keys: List[int] = []
+    ret_vals: List[float] = []
+    for i in range(1, len(close_vals)):
+        a, b = close_vals[i - 1], close_vals[i]
+        if a > 0 and b > 0:
+            ret_keys.append(close_keys[i])
+            ret_vals.append(math.log(b / a))
+
+    # -- Lazy heavy imports (keep test collection fast) ----------------------
+    import pandas as pd
+    from kalshi_edge.garch import forecast_garch_volatility
+    from kalshi_edge.vol_regression import VolatilityRegression, fetch_deribit_dvol_hourly
+
+    # -- Historical DVOL (fetch once, cache on disk) -------------------------
+    dvol_warm_up_s = (_REGRESSION_LOOKBACK_HOURS + 2) * 3600
+    dvol_start_ts = start_ts - dvol_warm_up_s
+    dvol_by_hour: Dict[int, float] = {}
+
+    dvol_cache_path = cache.dvol_hourly_path("BTC", dvol_start_ts, end_ts)
+    dvol_records = cache.read_json_gz(dvol_cache_path)
+    if not isinstance(dvol_records, list):
+        print("[backtest] fetching historical Deribit DVOL …")
+        try:
+            dvol_df = fetch_deribit_dvol_hourly(http, dvol_start_ts, end_ts)
+            dvol_records = [
+                {"ts_s": int(idx.timestamp()), "dvol": float(row["DVOL_Current"])}
+                for idx, row in dvol_df.iterrows()
+            ]
+            cache.write_json_gz(dvol_cache_path, dvol_records)
+            print(f"[backtest] cached {len(dvol_records)} DVOL hourly snapshots")
+        except Exception as e:
+            print(f"[backtest] warning: DVOL fetch failed ({e}); regression will be disabled")
+            dvol_records = []
+
+    for rec in dvol_records:
+        hour_ts = (int(rec["ts_s"]) // 3600) * 3600
+        dvol_by_hour[hour_ts] = float(rec["dvol"])
+
+    # -- Hourly RV snapshots (for regression training data) ------------------
+    rv_by_hour: Dict[int, float] = {}
+    if close_keys:
+        first_hour = (close_keys[0] // 3600) * 3600
+        last_hour = (close_keys[-1] // 3600) * 3600
+        for hour_ts in range(first_hour, last_hour + 3600, 3600):
+            idx = bisect.bisect_right(close_keys, hour_ts) - 1
+            if idx < 1:
+                continue
+            lo = max(0, idx - 60)
+            chunk = close_vals[lo: idx + 1]
+            if len(chunk) >= 2:
+                rv_by_hour[hour_ts] = annualized_realized_vol_from_closes(chunk)
+
+    # -- Volatility function caches ------------------------------------------
+    _CACHE_INTERVAL = 3600
+    _garch_cache: Dict[int, Optional[float]] = {}
+    _regression_cache: Dict[int, Optional[float]] = {}
+    garch_hits = 0
+    garch_misses = 0
 
     def spot_at_or_before(ts: int) -> Optional[float]:
         idx = bisect.bisect_right(close_keys, int(ts)) - 1
@@ -346,14 +419,108 @@ def run_backtest(
             return None
         return annualized_realized_vol_from_closes(closes)
 
+    def garch_sigma_at(ts: int) -> Optional[float]:
+        nonlocal garch_hits, garch_misses
+        bucket = (int(ts) // _CACHE_INTERVAL) * _CACHE_INTERVAL
+        cached = _garch_cache.get(bucket)
+        if cached is not None:
+            garch_hits += 1
+            return cached if cached > 0 else None
+        if bucket in _garch_cache:
+            garch_hits += 1
+            return None
+        garch_misses += 1
+        idx = bisect.bisect_right(ret_keys, int(ts))
+        if idx < 60:
+            _garch_cache[bucket] = 0.0
+            return None
+        lo = max(0, idx - 300)
+        trailing = pd.Series(ret_vals[lo:idx])
+        try:
+            sigma, _ = forecast_garch_volatility(trailing)
+            _garch_cache[bucket] = float(sigma)
+            return float(sigma)
+        except Exception as e:
+            _log.debug("GARCH fit failed at ts=%d: %s", ts, e)
+            _garch_cache[bucket] = 0.0
+            return None
+
+    def regression_sigma_at(ts: int) -> Optional[float]:
+        """
+        Fit DVOL/RV encompassing regression on trailing hourly data and predict.
+        Cached per hour. Uses only data strictly before the current hour (no lookahead).
+        """
+        bucket = (int(ts) // _CACHE_INTERVAL) * _CACHE_INTERVAL
+        if bucket in _regression_cache:
+            cached = _regression_cache[bucket]
+            return cached if cached is not None and cached > 0 else None
+
+        dvol_now = dvol_by_hour.get(bucket)
+        rv_now = rv_by_hour.get(bucket)
+        if dvol_now is None or dvol_now <= 0 or rv_now is None or rv_now <= 0:
+            _regression_cache[bucket] = None
+            return None
+
+        # Build training rows from trailing hours (target = NEXT hour's RV)
+        train_dvol, train_rv, train_target = [], [], []
+        for h in range(1, _REGRESSION_LOOKBACK_HOURS + 1):
+            h_ts = bucket - h * 3600
+            h_dvol = dvol_by_hour.get(h_ts)
+            h_rv = rv_by_hour.get(h_ts)
+            h_target = rv_by_hour.get(h_ts + 3600)
+            if h_dvol is not None and h_rv is not None and h_target is not None:
+                train_dvol.append(h_dvol)
+                train_rv.append(h_rv)
+                train_target.append(h_target)
+
+        if len(train_dvol) < 24:
+            _regression_cache[bucket] = None
+            return None
+
+        try:
+            df = pd.DataFrame({
+                "DVOL_Current": train_dvol,
+                "RV_Trailing": train_rv,
+                "Target_RV_Forward": train_target,
+            })
+            model = VolatilityRegression()
+            model.fit(df)
+            sigma_adj = model.predict(dvol_now, rv_now)
+            _regression_cache[bucket] = float(sigma_adj)
+            return float(sigma_adj)
+        except Exception as e:
+            _log.debug("Regression fit/predict failed at ts=%d: %s", ts, e)
+            _regression_cache[bucket] = None
+            return None
+
+    _use_regression = True
+
+    def volatility_at(ts: int) -> Tuple[Optional[float], str]:
+        """Full live hierarchy: Regression > GARCH > RV fallback."""
+        if _use_regression:
+            reg = regression_sigma_at(ts)
+            if reg is not None and reg > 0:
+                return reg, "regression"
+        g = garch_sigma_at(ts)
+        if g is not None and g > 0:
+            return g, "garch"
+        rv = realized_vol_at(ts)
+        if rv is not None and rv > 0:
+            return rv, "rv_fallback"
+        return None, "none"
+
+    # -- Tracking -----------------------------------------------------------
     positions: Dict[str, Position] = {}
     market_cost: Dict[str, float] = {}
     event_cost: Dict[str, float] = {}
     event_positions: Dict[str, int] = {}
     all_fills: List[Fill] = []
     per_event_results: List[EventResult] = []
+    total_wins = 0
+    total_settled = 0
     events_scanned = 0
     events_simulated = 0
+    vol_source_counts: Dict[str, int] = {}
 
     for ev in events_raw:
         et = _event_ticker(ev)
@@ -378,10 +545,19 @@ def run_backtest(
         if bt.ONLY_LAST_N_MINUTES is not None:
             event_start_ts = max(start_ts, close_ts - int(bt.ONLY_LAST_N_MINUTES) * 60)
         else:
-            # "today at Xpm" events are day-scoped; 24h lookback keeps runtime predictable.
             event_start_ts = max(start_ts, close_ts - 24 * 60 * 60)
         if event_start_ts >= close_ts:
             continue
+
+        # Pre-filter: only fetch candles for strikes near spot at event
+        # start.  Use 2× MAX_STRIKES so drifting spot still finds data.
+        prefilt_spot = spot_at_or_before(event_start_ts)
+        if prefilt_spot is not None:
+            prefilt_n = int(bt.MAX_STRIKES) * 2
+            metas = _pick_markets(metas, spot=prefilt_spot, max_strikes=prefilt_n, band_pct=float(bt.BAND_PCT))
+        if not metas:
+            continue
+        print(f"[backtest] event {et}: {len(metas)} strikes in pre-filter", flush=True)
 
         candles_by_market: Dict[str, Dict[int, Candle]] = {}
         live_tickers = [m.ticker for m in metas if m.close_ts >= cutoff_ts]
@@ -402,7 +578,6 @@ def run_backtest(
                             use_historical=(m.close_ts < cutoff_ts),
                         )
                     except Exception as e:
-                        # Keep backtest robust: skip market on fetch errors.
                         print(f"[backtest] warning: candles unavailable for {m.ticker}: {e}")
                         rows = []
                 cache.write_json_gz(cpath, rows)
@@ -438,10 +613,11 @@ def run_backtest(
             if spot is None:
                 t += step_s
                 continue
-            sigma = realized_vol_at(t)
+            sigma, vol_source = volatility_at(t)
             if sigma is None:
                 t += step_s
                 continue
+            vol_source_counts[vol_source] = vol_source_counts.get(vol_source, 0) + 1
 
             chosen = _pick_markets(metas, spot=spot, max_strikes=int(bt.MAX_STRIKES), band_pct=float(bt.BAND_PCT))
             cands: List[_Candidate] = []
@@ -453,7 +629,6 @@ def run_backtest(
                 if yask is None and ybid is None:
                     continue
                 spread = _quote_spread(ybid, yask)
-                # Skip crossed/inverted quotes from sparse candle snapshots.
                 if spread is not None and int(spread) < 0:
                     continue
                 if spread is not None and int(cfg.SPREAD_MAX_CENTS) >= 0 and int(spread) > int(cfg.SPREAD_MAX_CENTS):
@@ -567,6 +742,8 @@ def run_backtest(
                     p_win=float(cand.p_yes if cand.side == "yes" else (1.0 - cand.p_yes)),
                     ev=float(cand.edge_pp),
                     spread=cand.spread,
+                    sigma=float(sigma),
+                    vol_source=vol_source,
                 )
                 all_fills.append(fill)
                 pos.fills.append(fill)
@@ -595,6 +772,8 @@ def run_backtest(
                         "p_win": float(fill.p_win),
                         "ev": float(fill.ev),
                         "spread": int(fill.spread) if fill.spread is not None else None,
+                        "sigma": float(fill.sigma),
+                        "vol_source": fill.vol_source,
                     },
                 )
             t += step_s
@@ -624,16 +803,19 @@ def run_backtest(
             if fill_pnl > 0:
                 wins += 1
 
+        total_wins += wins
+        total_settled += settled
+
         trades = len(event_fills)
         contracts = sum(int(f.contracts) for f in event_fills)
-        win_rate = (float(wins) / float(settled)) if settled > 0 else 0.0
+        event_win_rate = (float(wins) / float(settled)) if settled > 0 else 0.0
         er = EventResult(
             event_ticker=et,
             close_ts=close_ts,
             trades=trades,
             contracts=contracts,
             pnl=float(pnl),
-            win_rate=float(win_rate),
+            win_rate=float(event_win_rate),
         )
         per_event_results.append(er)
         _append_jsonl(
@@ -652,10 +834,20 @@ def run_backtest(
     total_pnl = float(sum(float(e.pnl) for e in per_event_results))
     total_trades = int(sum(int(e.trades) for e in per_event_results))
     total_contracts = int(sum(int(e.contracts) for e in per_event_results))
-    settled_events = [e for e in per_event_results if e.trades > 0]
-    win_rate = 0.0
-    if settled_events:
-        win_rate = float(sum(float(e.win_rate) for e in settled_events) / float(len(settled_events)))
+    win_rate = (float(total_wins) / float(total_settled)) if total_settled > 0 else 0.0
+
+    total_vol_ticks = sum(vol_source_counts.values()) if vol_source_counts else 0
+    vol_summary_parts = []
+    for src in ("regression", "garch", "rv_fallback"):
+        cnt = vol_source_counts.get(src, 0)
+        if cnt > 0:
+            pct = 100.0 * cnt / total_vol_ticks
+            vol_summary_parts.append(f"{src}={cnt} ({pct:.1f}%)")
+    print(
+        f"[backtest] vol sources: {', '.join(vol_summary_parts) or 'none'} | "
+        f"dvol_hours={len(dvol_by_hour)} rv_hours={len(rv_by_hour)} | "
+        f"GARCH cache: {garch_hits} hits, {garch_misses} fits"
+    )
 
     summary = BacktestSummary(
         series_ticker=str(bt.SERIES_TICKER),
@@ -684,12 +876,19 @@ def run_backtest(
             "contracts": int(summary.contracts),
             "total_pnl": float(summary.total_pnl),
             "win_rate": float(summary.win_rate),
+            "vol_source_counts": dict(vol_source_counts),
+            "dvol_hours_available": len(dvol_by_hour),
+            "rv_hours_available": len(rv_by_hour),
+            "garch_cache_hits": garch_hits,
+            "garch_cache_fits": garch_misses,
             "config": {
                 "strategy": config_to_dict(cfg),
                 "backtest": dict(bt.__dict__),
                 "notes": {
-                    "fill_model": "immediate taker fill at ask when quote present",
-                    "depth_gate": "MIN_TOP_SIZE ignored in backtest (no orderbook size in candles)",
+                    "fill_model": "taker-only: immediate fill at ask when quote present",
+                    "vol_model": "regression (DVOL+RV) > GARCH(1,1) > trailing RV (matches live hierarchy)",
+                    "regression_lookback": f"{_REGRESSION_LOOKBACK_HOURS}h, min 24 obs, no lookahead",
+                    "depth_gate": "MIN_TOP_SIZE ignored (no orderbook size in candles)",
                 },
             },
         },

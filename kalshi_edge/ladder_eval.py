@@ -63,6 +63,7 @@ class LadderRow:
     ev_no: Optional[float]
     rec: str
     rec_note: str
+    p_mc: Optional[float] = None
 
 
 def _best_bid(levels: list) -> Optional[Tuple[int, float]]:
@@ -177,11 +178,24 @@ def evaluate_ladder(
     depth_window_cents: int,
     sort_mode: str,
     threads: int,
+    mc_paths: int = 0,
+    mc_steps: int = 60,
 ) -> List[LadderRow]:
     """
     Main ladder evaluation routine.
+
+    When ``mc_paths > 0``, also runs a GBM Monte Carlo simulation and stores
+    ``p_mc`` on each row for cross-validation against the analytical model.
     """
     chosen = pick_markets_near_spot(markets, spot, max_strikes=max_strikes, band_pct=band_pct)
+
+    # Pre-compute MC terminal prices once (shared across all strikes).
+    terminal_prices = None
+    if mc_paths > 0:
+        from kalshi_edge.monte_carlo import monte_carlo_terminal_prices, mc_prob_above
+        terminal_prices = monte_carlo_terminal_prices(
+            spot, sigma_blend, minutes_left, n_paths=mc_paths, n_steps=mc_steps,
+        )
 
     def fetch_one(tkr: str) -> Tuple[str, dict]:
         return tkr, get_orderbook(http, tkr)
@@ -206,6 +220,10 @@ def evaluate_ladder(
         p = clamp01(lognormal_prob_above(spot, strike, sigma_blend, minutes_left))
         sens = p * (1.0 - p)
         ob_stats = parse_orderbook_stats(ob_json, depth_window_cents=depth_window_cents)
+
+        p_mc = None
+        if terminal_prices is not None:
+            p_mc = float(mc_prob_above(terminal_prices, strike))
 
         ev_yes = ev_buy_binary(p, ob_stats.ybuy, fee_cents)
         ev_no = ev_buy_binary(1.0 - p, ob_stats.nbuy, fee_cents)
@@ -239,6 +257,7 @@ def evaluate_ladder(
             ev_no=ev_no,
             rec=rec,
             rec_note=rec_note,
+            p_mc=p_mc,
         ))
 
     # sorting

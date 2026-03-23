@@ -8,6 +8,9 @@ Run:
 
 from __future__ import annotations
 
+import faulthandler
+faulthandler.enable()
+
 import argparse
 import os
 from datetime import date, datetime, time, timedelta, timezone
@@ -71,6 +74,8 @@ def main() -> int:
         f"backtest_{bt.SERIES_TICKER}_{start_dt.strftime('%Y%m%d')}_{(end_dt - timedelta(days=1)).strftime('%Y%m%d')}_{ts}.jsonl",
     )
     print(f"[backtest] log path: {log_path}")
+    print("[backtest] vol model: regression (DVOL+RV) > GARCH(1,1) > trailing RV")
+    print("[backtest] fill model: taker-only (immediate fill at ask)")
     print("[backtest] note: MIN_TOP_SIZE gate is ignored (candles do not include depth/top-size).")
 
     try:

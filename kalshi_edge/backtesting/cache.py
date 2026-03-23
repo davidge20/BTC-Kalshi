@@ -33,8 +33,14 @@ class FileCache:
     def read_json_gz(self, path: str) -> Optional[Any]:
         if not os.path.exists(path):
             return None
-        with gzip.open(path, "rt", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            sz = os.path.getsize(path)
+            if sz < 20:
+                return None
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                return json.load(f)
+        except (gzip.BadGzipFile, EOFError, json.JSONDecodeError, OSError):
+            return None
 
     def write_json_gz(self, path: str, payload: Any) -> None:
         self._ensure_parent(path)
@@ -56,4 +62,11 @@ class FileCache:
             "coinbase",
             _safe_part(product),
             f"{int(start_ts)}-{int(end_ts)}-1m.json.gz",
+        )
+
+    def dvol_hourly_path(self, currency: str, start_ts: int, end_ts: int) -> str:
+        return self._path(
+            "deribit_dvol",
+            _safe_part(currency),
+            f"{int(start_ts)}-{int(end_ts)}-hourly.json.gz",
         )

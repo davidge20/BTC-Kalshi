@@ -59,10 +59,15 @@ def render_once(
         print(_clip_line(line, max_width))
 
     if compact:
-        # One-line summary for watch mode (minimize terminal height)
+        if ms.sigma_adjusted > 0:
+            vol_label = "regression"
+        elif ms.sigma_garch > 0:
+            vol_label = "GARCH"
+        else:
+            vol_label = "blend"
         emit(
             f"{result.event_ticker} | left {ms.minutes_left:.1f}m | "
-            f"spot ${ms.spot:,.2f} | vol {ms.sigma_blend*100:.1f}% | "
+            f"spot ${ms.spot:,.2f} | {vol_label} {ms.sigma_blend*100:.1f}% | "
             f"1σ {ms.one_sigma_move_pct:.2f}% | {ms.confidence}"
         )
         if ms.note:
@@ -74,9 +79,16 @@ def render_once(
         emit(f"UTC time:              {ms.ts_utc.isoformat()}")
         emit(f"Minutes left:          {ms.minutes_left:.2f}")
         emit(f"Deribit index (spot):  ${ms.spot:,.2f}")
+        if ms.dvol_current > 0:
+            emit(f"Deribit DVOL:          {ms.dvol_current*100:.1f}%")
+        if ms.sigma_adjusted > 0:
+            emit(f"Regression σ_adj:      {ms.sigma_adjusted*100:.1f}%  <-- primary")
+        if ms.sigma_garch > 0:
+            primary_tag = "  <-- primary" if ms.sigma_adjusted <= 0 else ""
+            emit(f"GARCH(1,1) vol:        {ms.sigma_garch*100:.1f}%{primary_tag}")
         emit(f"Implied ATM vol:       {ms.sigma_implied*100:.1f}%")
         emit(f"Realized 1h vol:       {ms.sigma_realized*100:.1f}%")
-        emit(f"Blend vol:             {ms.sigma_blend*100:.1f}%")
+        emit(f"Model vol (σ):         {ms.sigma_blend*100:.1f}%")
         emit(f"Confidence:            {ms.confidence}")
         emit(f"1σ move (time left):   ~{ms.one_sigma_move_pct:.2f}%")
         emit(f"Notes:                 {ms.note}")
@@ -107,12 +119,14 @@ def print_ladder_table(
     else:
         title = f"Kalshi ABOVE ladder (sort={sort_mode})"
     print(_clip_line(title, max_width))
+    has_mc = any(r.p_mc is not None for r in rows)
     hdr = (
         "Idx".rjust(4) +
         "  Ticker".ljust(34) +
         "Strike".rjust(10) +
         "   ΔK".rjust(8) +
         "     P".rjust(7) +
+        ("  P_MC".rjust(7) if has_mc else "") +
         "  Sens".rjust(7) +
         "  Ybid".rjust(6) +
         "  Nbid".rjust(6) +
@@ -135,12 +149,14 @@ def print_ladder_table(
         dk = r.strike - spot
         evy = "-" if r.ev_yes is None else f"{r.ev_yes:+.3f}"
         evn = "-" if r.ev_no is None else f"{r.ev_no:+.3f}"
+        mc_col = f"{r.p_mc:7.3f}" if (has_mc and r.p_mc is not None) else ""
         line = (
             f"{i:4d}  " +
             r.ticker.ljust(34) +
             f"{r.strike:10,.0f}" +
             f"{dk:8,.0f}" +
             f"{r.p_model:7.3f}" +
+            (mc_col if has_mc else "") +
             f"{r.sens:7.3f}" +
             f"{fmt_cents(r.ob.ybid):>6}" +
             f"{fmt_cents(r.ob.nbid):>6}" +
@@ -160,7 +176,11 @@ def print_explainer(*, max_width: Optional[int] = None) -> None:
     print(_clip_line("", max_width))
     print(_clip_line("=== How to read the ladder columns ===", max_width))
     print(_clip_line(
-        "P        : our model probability that BTC >= strike at close (lognormal + blended vol).",
+        "P        : analytical probability that BTC >= strike at close (lognormal, σ from regression/GARCH).",
+        max_width,
+    ))
+    print(_clip_line(
+        "P_MC     : Monte Carlo probability (10k GBM paths, same σ). Cross-validation for P.",
         max_width,
     ))
     print(_clip_line(
