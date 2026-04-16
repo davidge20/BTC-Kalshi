@@ -124,11 +124,31 @@ EVENT_SCHEMAS: Dict[str, EventSchema] = {
     ),
     "exit_signal": EventSchema(
         required_keys=["reason", "market_ticker", "side"],
-        optional_keys=["minutes_left", "bid_cents", "net_exit_now", "sell_count"],
+        optional_keys=[
+            "minutes_left",
+            "bid_cents",
+            "ask_cents",
+            "mid_cents",
+            "net_exit_now",
+            "sell_count",
+            "p_win_now",
+            "avg_entry_cost_cents",
+            "edge_now_pp",
+        ],
     ),
     "exit_filled": EventSchema(
         required_keys=["market_ticker", "side", "sell_count"],
-        optional_keys=["reason", "exit_bid_cents", "exit_net", "entry_cost", "pnl_total", "pnl_per_contract"],
+        optional_keys=[
+            "reason",
+            "exit_bid_cents",
+            "exit_fee_cents",
+            "exit_net",
+            "entry_cost",
+            "pnl_total",
+            "pnl_per_contract",
+            "remaining_count",
+            "avg_entry_cost_cents",
+        ],
     ),
     # --- decision context ---
     "tick_summary": EventSchema(

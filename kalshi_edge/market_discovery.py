@@ -5,9 +5,10 @@ market_discovery.py
 Auto-discovery:
 If the user doesn't supply `--event` or `--url`, pick the soonest-closing BTC
 Above/Below event by scanning Kalshi `/markets` for markets whose
-`event_ticker` starts with `KXBTCD-`.
+`event_ticker` matches the configured series ticker (for example `KXBTCD-`
+or `KXBTC15M-`).
 
-Currently, we are focusing on the `KXBTCD-` market
+Currently, we support the `KXBTCD-` and `KXBTC15M-` markets.
 """
 
 from __future__ import annotations
@@ -75,14 +76,21 @@ def _get_str(m: dict, *keys: str) -> str:
     return ""
 
 
-def _is_kxbtcd_event(event_ticker: str) -> bool:
-    """Return True if this looks like a BTC Above/Below event ticker."""
-    return event_ticker.upper().startswith("KXBTCD-")
+def _is_btc_event(event_ticker: str, *, series_ticker: Optional[str] = None) -> bool:
+    """Return True if event ticker matches a supported BTC series."""
+    up = event_ticker.upper()
+    if isinstance(series_ticker, str) and series_ticker.strip():
+        pref = series_ticker.strip().upper()
+        if not pref.endswith("-"):
+            pref = f"{pref}-"
+        return up.startswith(pref)
+    return up.startswith("KXBTCD-") or up.startswith("KXBTC15M-")
 
 
 def discover_current_event(
     window_minutes: int = 70,
     debug_http: bool = False,
+    series_ticker: Optional[str] = None,
 ) -> DiscoveredEvent:
     """
     Discover the soonest-closing BTC Above/Below event by scanning markets closing soon.
@@ -90,19 +98,21 @@ def discover_current_event(
     Strategy:
     - pull closing-soon markets via /markets
     - keep those that:
-        * have an event_ticker that looks like KXBTCD-...
+        * have an event_ticker in the requested series
         * have a close_time
     - choose the soonest close_time
     """
     http = HttpClient(debug=debug_http)
     now = utc_now()
+    series_pref = (series_ticker.strip().upper() if isinstance(series_ticker, str) else "")
 
     min_close_ts = int(now.timestamp())
     max_close_ts = int(now.timestamp() + window_minutes * 60)
 
     markets = _list_markets_closing_soon(http, min_close_ts, max_close_ts)
     if debug_http:
-        print(f"[Discover] fetched markets={len(markets)} window_minutes={window_minutes}")
+        sf = series_pref or "KXBTCD|KXBTC15M"
+        print(f"[Discover] fetched markets={len(markets)} window_minutes={window_minutes} series={sf}")
 
     candidates: List[dict] = []
 
@@ -112,7 +122,7 @@ def discover_current_event(
         title = _get_str(m, "title", "market_title", "name")
         close_time = _get_str(m, "close_time", "closeTime")
 
-        if not event_ticker or not _is_kxbtcd_event(event_ticker):
+        if not event_ticker or not _is_btc_event(event_ticker, series_ticker=series_pref):
             continue
         if not close_time:
             continue
@@ -120,9 +130,18 @@ def discover_current_event(
         candidates.append(m)
 
     if not candidates:
+        if series_pref:
+            msg = (
+                f"Could not auto-discover a {series_pref} event from /markets. "
+                "Try widening --window-minutes (e.g. 360 or 1440), or pass --event/--url."
+            )
+        else:
+            msg = (
+                "Could not auto-discover a KXBTCD or KXBTC15M event from /markets. "
+                "Try widening --window-minutes (e.g. 360 or 1440), or pass --event/--url."
+            )
         raise RuntimeError(
-            "Could not auto-discover a KXBTCD event from /markets. "
-            "Try widening --window-minutes (e.g. 360 or 1440), or pass --event/--url."
+            msg
         )
 
     # choose soonest-closing

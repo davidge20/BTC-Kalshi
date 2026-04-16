@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from kalshi_edge.data.kalshi.client import HttpClientLike, KalshiAuthLike
+from kalshi_edge.exit_rules import ExitMarketSnapshot, evaluate_exit, should_pause_new_entries
 from kalshi_edge.fill_delta import FillDelta
 from kalshi_edge.order_manager import OrderManager, market_side_key
 from kalshi_edge.paper_fill_sim import PaperFillSimulator
@@ -28,6 +29,7 @@ from kalshi_edge.trade_log import TradeLogger
 from kalshi_edge.telemetry.state_io import read_state as _read_state, write_state as _write_state
 from kalshi_edge.util.coerce import as_int as _as_int, as_float as _as_float
 from kalshi_edge.util.time import utc_ts, parse_ts as _parse_ts, secs_since as _secs_since
+from kalshi_edge.math_models import clamp01
 
 if TYPE_CHECKING:
     from kalshi_edge.pipeline import EvaluationResult
@@ -45,6 +47,14 @@ SCHEMA = "v2.2"
 def _is_terminal(status: str) -> bool:
     s = (status or "").lower()
     return s in {"canceled", "cancelled", "executed", "filled", "rejected", "expired", "error"}
+
+
+def _kelly_fraction_binary(*, p_win: float, total_cost_dollars: float) -> float:
+    cost = float(total_cost_dollars)
+    if cost <= 0.0 or cost >= 1.0:
+        return 0.0
+    p = clamp01(float(p_win))
+    return max(0.0, float((p - cost) / (1.0 - cost)))
 
 
 @dataclass
@@ -107,9 +117,15 @@ class Trader:
         _smc = self.cfg.SPREAD_MAX_CENTS if spread_max_cents is None else spread_max_cents
         self.spread_max_cents = int(_smc) if _smc is not None else None
 
-        self.max_positions_per_event = int(self.cfg.MAX_POSITIONS_PER_EVENT)
-        self.max_cost_per_event = float(self.cfg.MAX_COST_PER_EVENT)
-        self.max_cost_per_market = float(self.cfg.MAX_COST_PER_MARKET)
+        self.max_positions_per_event = (
+            int(self.cfg.MAX_POSITIONS_PER_EVENT) if self.cfg.MAX_POSITIONS_PER_EVENT is not None else None
+        )
+        self.max_cost_per_event = (
+            float(self.cfg.MAX_COST_PER_EVENT) if self.cfg.MAX_COST_PER_EVENT is not None else None
+        )
+        self.max_cost_per_market = (
+            float(self.cfg.MAX_COST_PER_MARKET) if self.cfg.MAX_COST_PER_MARKET is not None else None
+        )
         # Optional global caps (not in StrategyConfig yet).
         self.max_total_cost = None
         self.max_total_positions = None
@@ -123,8 +139,19 @@ class Trader:
         self.p_requote_pp = float(self.cfg.P_REQUOTE_PP)
         self.max_entries_per_tick = int(self.cfg.MAX_ENTRIES_PER_TICK)
         self.log_top_n_candidates = int(getattr(self.cfg, "LOG_TOP_N_CANDIDATES", 5))
+        self.position_sizing_mode = str(getattr(self.cfg, "POSITION_SIZING_MODE", "fixed"))
+        self.starting_bankroll_dollars = float(getattr(self.cfg, "STARTING_BANKROLL_DOLLARS", 100.0))
+        self.kelly_fraction_scale = float(getattr(self.cfg, "KELLY_FRACTION", 1.0))
+        self.exit_take_profit_mid_cents = (
+            int(self.cfg.EXIT_TAKE_PROFIT_MID_CENTS) if self.cfg.EXIT_TAKE_PROFIT_MID_CENTS is not None else None
+        )
+        self.exit_on_signal_reversal = bool(self.cfg.EXIT_ON_SIGNAL_REVERSAL)
+        self.exit_signal_min_edge_pp = float(self.cfg.EXIT_SIGNAL_MIN_EDGE_PP)
+        self.exit_minutes_left = float(self.cfg.EXIT_MINUTES_LEFT)
 
-        self.max_contracts_per_market = int(self.cfg.MAX_CONTRACTS_PER_MARKET)
+        self.max_contracts_per_market = (
+            int(self.cfg.MAX_CONTRACTS_PER_MARKET) if self.cfg.MAX_CONTRACTS_PER_MARKET is not None else None
+        )
         self.allow_scale_in = bool(self.cfg.ALLOW_SCALE_IN)
         self.scale_in_cooldown_seconds = int(self.cfg.SCALE_IN_COOLDOWN_SECONDS)
 
@@ -158,6 +185,7 @@ class Trader:
         self.event_positions: Dict[str, int] = {}
         self.total_cost_all: float = 0.0
         self.positions_count_all: int = 0
+        self.realized_pnl_total: float = 0.0
 
         self.open_orders: Dict[str, Dict[str, Any]] = {}
         self.active_order_by_market: Dict[str, str] = {}
@@ -186,6 +214,7 @@ class Trader:
                 "event_positions": self.event_positions,
                 "total_cost_all": float(self.total_cost_all),
                 "positions_count_all": int(self.positions_count_all),
+                "realized_pnl_total": float(self.realized_pnl_total),
                 "open_orders": self.open_orders,
                 "active_order_by_market": self.active_order_by_market,
                 "ts_utc": utc_ts(),
@@ -284,6 +313,7 @@ class Trader:
         self.event_positions = {str(k): int(v) for k, v in (st.get("event_positions") or {}).items() if isinstance(k, str)}
         self.total_cost_all = _as_float(st.get("total_cost_all"), 0.0)
         self.positions_count_all = _as_int(st.get("positions_count_all"), 0)
+        self.realized_pnl_total = _as_float(st.get("realized_pnl_total"), 0.0)
         if not self.market_cost or not self.event_cost:
             self._recompute_aggregates_from_positions()
 
@@ -298,11 +328,11 @@ class Trader:
         is_new_market_in_event: bool,
     ) -> Optional[str]:
         evt = str(event_ticker)
-        if is_new_market_in_event and int(self.event_positions.get(evt, 0)) >= int(self.max_positions_per_event):
+        if self.max_positions_per_event is not None and is_new_market_in_event and int(self.event_positions.get(evt, 0)) >= int(self.max_positions_per_event):
             return "max_positions_per_event"
-        if (float(self.event_cost.get(evt, 0.0)) + float(add_cost_dollars)) > float(self.max_cost_per_event):
+        if self.max_cost_per_event is not None and (float(self.event_cost.get(evt, 0.0)) + float(add_cost_dollars)) > float(self.max_cost_per_event):
             return "max_cost_per_event"
-        if (float(self.market_cost.get(market_ticker, 0.0)) + float(add_cost_dollars)) > float(self.max_cost_per_market):
+        if self.max_cost_per_market is not None and (float(self.market_cost.get(market_ticker, 0.0)) + float(add_cost_dollars)) > float(self.max_cost_per_market):
             return "max_cost_per_market"
         if self.max_total_cost is not None:
             if (float(self.total_cost_all) + float(add_cost_dollars)) > float(self.max_total_cost):
@@ -328,7 +358,7 @@ class Trader:
         if current <= 0:
             if cand.edge_pp < float(self.min_edge_pp_entry):
                 return current, current, "edge_below_min_entry"
-            return current, min(self.max_contracts_per_market, current + self.count), None
+            return current, self._desired_total_contracts(cand=cand, current_contracts=current), None
 
         if not self.allow_scale_in:
             return current, current, "scale_in_disabled"
@@ -336,7 +366,23 @@ class Trader:
             return current, current, "edge_below_min_scale_in"
         if not self._cooldown_ok(pos):
             return current, current, "scale_in_cooldown"
-        return current, min(self.max_contracts_per_market, current + self.count), None
+        return current, self._desired_total_contracts(cand=cand, current_contracts=current), None
+
+    def _desired_total_contracts(self, *, cand: _ActionCandidate, current_contracts: int) -> int:
+        if self.position_sizing_mode != "kelly":
+            target = int(current_contracts) + self.count
+            return min(self.max_contracts_per_market, target) if self.max_contracts_per_market is not None else target
+
+        p_win = float(cand.p_yes if cand.side == "yes" else (1.0 - cand.p_yes))
+        total_cost_dollars = float(cand.price_cents + cand.fee_cents) / 100.0
+        bankroll_dollars = max(0.0, self.starting_bankroll_dollars + self.realized_pnl_total)
+        if total_cost_dollars <= 0.0 or bankroll_dollars <= 0.0:
+            return int(current_contracts)
+        kelly_f = _kelly_fraction_binary(p_win=p_win, total_cost_dollars=total_cost_dollars)
+        target_dollars = bankroll_dollars * self.kelly_fraction_scale * kelly_f
+        target_contracts = int(math.floor(target_dollars / total_cost_dollars))
+        target_contracts = max(0, target_contracts)
+        return min(self.max_contracts_per_market, target_contracts) if self.max_contracts_per_market is not None else target_contracts
 
     # ---- fills -> positions ----
 
@@ -424,6 +470,259 @@ class Trader:
             self.event_positions[event_ticker] = int(self.event_positions.get(event_ticker, 0) + 1)
             self.positions_count_all = int(self.positions_count_all + 1)
         return was_open
+
+    def _position_avg_cost_cents(self, pos: Dict[str, Any]) -> Optional[float]:
+        total_count = _as_int(pos.get("total_count"), 0)
+        if total_count <= 0:
+            return None
+        return (_as_float(pos.get("total_cost_dollars"), 0.0) * 100.0) / float(total_count)
+
+    def _apply_exit_fill(
+        self,
+        *,
+        market_ticker: str,
+        sell_count: int,
+        price_cents: int,
+        fee_cents: int,
+        order_id: str,
+        reason: str,
+    ) -> bool:
+        pos = self.open_positions.get(market_ticker)
+        if not isinstance(pos, dict):
+            self.log.log("skip", {"market_ticker": market_ticker, "side": "", "skip_reason": "exit_without_position", "order_id": order_id})
+            return False
+
+        total_count_before = _as_int(pos.get("total_count"), 0)
+        if total_count_before <= 0:
+            return False
+        actual_sell_count = min(int(sell_count), int(total_count_before))
+        if actual_sell_count <= 0:
+            return False
+
+        total_cost_before = _as_float(pos.get("total_cost_dollars"), 0.0)
+        total_fee_before = _as_float(pos.get("total_fee_dollars"), 0.0)
+        avg_entry_cost_cents = (float(total_cost_before) * 100.0) / float(total_count_before)
+        entry_cost_alloc = float(total_cost_before) * (float(actual_sell_count) / float(total_count_before))
+        entry_fee_alloc = float(total_fee_before) * (float(actual_sell_count) / float(total_count_before))
+        exit_net = float(actual_sell_count) * ((float(price_cents) - float(fee_cents)) / 100.0)
+        pnl_total = float(exit_net - entry_cost_alloc)
+        self.realized_pnl_total = float(self.realized_pnl_total + pnl_total)
+
+        remaining_count = int(total_count_before - actual_sell_count)
+        evt = str(pos.get("event_ticker") or "")
+        pos["total_count"] = int(remaining_count)
+        pos["total_cost_dollars"] = float(max(0.0, total_cost_before - entry_cost_alloc))
+        pos["total_fee_dollars"] = float(max(0.0, total_fee_before - entry_fee_alloc))
+
+        self.market_cost[market_ticker] = float(max(0.0, self.market_cost.get(market_ticker, 0.0) - entry_cost_alloc))
+        if evt:
+            self.event_cost[evt] = float(max(0.0, self.event_cost.get(evt, 0.0) - entry_cost_alloc))
+        self.total_cost_all = float(max(0.0, self.total_cost_all - entry_cost_alloc))
+
+        if remaining_count <= 0:
+            self.open_positions.pop(market_ticker, None)
+            self.market_cost.pop(market_ticker, None)
+            if evt:
+                self.event_positions[evt] = int(max(0, int(self.event_positions.get(evt, 0)) - 1))
+                if int(self.event_positions.get(evt, 0)) <= 0:
+                    self.event_positions.pop(evt, None)
+                if float(self.event_cost.get(evt, 0.0)) <= 0.0:
+                    self.event_cost.pop(evt, None)
+            self.positions_count_all = int(max(0, int(self.positions_count_all) - 1))
+        else:
+            self.open_positions[market_ticker] = pos
+
+        self.log.log(
+            "exit_filled",
+            {
+                "reason": str(reason),
+                "market_ticker": str(market_ticker),
+                "side": str(pos.get("side") or ""),
+                "sell_count": int(actual_sell_count),
+                "exit_bid_cents": int(price_cents),
+                "exit_fee_cents": int(fee_cents),
+                "exit_net": float(exit_net),
+                "entry_cost": float(entry_cost_alloc),
+                "pnl_total": float(pnl_total),
+                "pnl_per_contract": float(pnl_total / float(actual_sell_count)),
+                "remaining_count": int(max(0, remaining_count)),
+                "avg_entry_cost_cents": float(avg_entry_cost_cents),
+            },
+        )
+        return remaining_count <= 0
+
+    def _build_exit_snapshot(self, pos: Dict[str, Any], row, minutes_left: float) -> ExitMarketSnapshot:
+        return ExitMarketSnapshot(
+            side=str(pos.get("side") or ""),
+            p_yes=float(row.p_model),
+            minutes_left=float(minutes_left),
+            yes_bid_cents=int(row.ob.ybid) if row.ob.ybid is not None else None,
+            yes_ask_cents=int(row.ob.ybuy) if row.ob.ybuy is not None else None,
+            no_bid_cents=int(row.ob.nbid) if row.ob.nbid is not None else None,
+            no_ask_cents=int(row.ob.nbuy) if row.ob.nbuy is not None else None,
+        )
+
+    def _submit_exit_order(
+        self,
+        *,
+        market_ticker: str,
+        event_ticker: str,
+        side: str,
+        sell_count: int,
+        bid_cents: int,
+        p_yes: float,
+        reason: str,
+    ) -> bool:
+        key = market_side_key(market_ticker, side)
+        self.log.log(
+            "decision",
+            {
+                "action": "submit",
+                "reason": str(reason),
+                "market_ticker": str(market_ticker),
+                "side": str(side),
+                "source": "taker",
+                "price_cents": int(bid_cents),
+                "count": int(sell_count),
+            },
+        )
+        self.log.log(
+            "order_submit",
+            {
+                "mode": "taker",
+                "source": "taker",
+                "action": "sell",
+                "market_ticker": str(market_ticker),
+                "side": str(side),
+                "count": int(sell_count),
+                "price_cents": int(bid_cents),
+                "tif": str(self.taker_time_in_force),
+                "reason": str(reason),
+            },
+        )
+        tracked, _resp = self.om.submit_new_order(
+            market_ticker=market_ticker,
+            event_ticker=event_ticker,
+            side=side,
+            price_cents=int(bid_cents),
+            count=int(sell_count),
+            time_in_force=str(self.taker_time_in_force),
+            post_only=False,
+            source="taker",
+            last_model_p=float(p_yes),
+            last_edge_pp=0.0,
+            fee_cents_per_contract=int(self.fee_cents_taker),
+            action="sell",
+        )
+        tracked["exit_reason"] = str(reason)
+        oid = str(tracked.get("order_id"))
+        self.open_orders[oid] = tracked
+        self.active_order_by_market[key] = oid
+
+        fc = _as_int(tracked.get("fill_count"), 0)
+        if fc > 0:
+            total_cost = _as_int(tracked.get("last_fill_cost_cents"), 0)
+            total_fee = _as_int(tracked.get("last_fee_paid_cents"), 0)
+            delta = FillDelta(delta_fill_count=fc, delta_cost_cents=total_cost, delta_fee_cents=total_fee, ts_utc=utc_ts())
+            price_cents = delta.avg_price_cents if delta.avg_price_cents is not None else int(bid_cents)
+            fee_cents = delta.avg_fee_cents if delta.avg_fee_cents is not None else int(self.fee_cents_taker)
+            self._apply_exit_fill(
+                market_ticker=market_ticker,
+                sell_count=int(delta.delta_fill_count),
+                price_cents=int(price_cents),
+                fee_cents=int(fee_cents),
+                order_id=str(oid),
+                reason=str(reason),
+            )
+        if _is_terminal(str(tracked.get("status", "")).lower()) or _as_int(tracked.get("remaining_count"), 0) <= 0:
+            self._cleanup_order_refs(oid)
+        return True
+
+    def _process_exit_signals(self, result: EvaluationResult, by_ticker: Dict[str, Any]) -> Tuple[bool, set[str]]:
+        changed = False
+        exited_markets: set[str] = set()
+        for market_ticker, pos in list(self.open_positions.items()):
+            if not isinstance(pos, dict) or _as_int(pos.get("total_count"), 0) <= 0:
+                continue
+            row = by_ticker.get(str(market_ticker))
+            if row is None:
+                continue
+            decision = evaluate_exit(
+                snapshot=self._build_exit_snapshot(pos, row, result.minutes_left),
+                total_count=_as_int(pos.get("total_count"), 0),
+                total_cost_dollars=_as_float(pos.get("total_cost_dollars"), 0.0),
+                take_profit_mid_cents=self.exit_take_profit_mid_cents,
+                exit_minutes_left=float(self.exit_minutes_left),
+                signal_exit_enabled=bool(self.exit_on_signal_reversal),
+                signal_exit_min_edge_pp=float(self.exit_signal_min_edge_pp),
+            )
+            if decision is None:
+                continue
+
+            exited_markets.add(str(market_ticker))
+            sell_count = _as_int(pos.get("total_count"), 0)
+            self.log.log(
+                "exit_signal",
+                {
+                    "reason": str(decision.reason),
+                    "market_ticker": str(market_ticker),
+                    "side": str(pos.get("side") or ""),
+                    "minutes_left": float(result.minutes_left),
+                    "bid_cents": int(decision.bid_cents) if decision.bid_cents is not None else None,
+                    "ask_cents": int(decision.ask_cents) if decision.ask_cents is not None else None,
+                    "mid_cents": float(decision.mid_cents) if decision.mid_cents is not None else None,
+                    "net_exit_now": (
+                        float(sell_count) * ((float(decision.bid_cents) - float(self.fee_cents_taker)) / 100.0)
+                        if decision.bid_cents is not None
+                        else None
+                    ),
+                    "sell_count": int(sell_count),
+                    "p_win_now": float(decision.p_win_now),
+                    "avg_entry_cost_cents": float(decision.avg_entry_cost_cents),
+                    "edge_now_pp": float(decision.edge_now_pp),
+                },
+            )
+
+            key = market_side_key(str(market_ticker), str(pos.get("side") or ""))
+            existing_oid = self.active_order_by_market.get(key)
+            if existing_oid and existing_oid in self.open_orders:
+                tracked = self.open_orders[existing_oid]
+                if not _is_terminal(str(tracked.get("status", "")).lower()):
+                    if self._cancel_order(tracked, reason="exit_signal"):
+                        changed = True
+                    else:
+                        self.log.log(
+                            "skip",
+                            {
+                                "market_ticker": str(market_ticker),
+                                "side": str(pos.get("side") or ""),
+                                "skip_reason": "exit_cancel_failed",
+                            },
+                        )
+                        continue
+
+            if decision.bid_cents is None or decision.bid_cents <= 0:
+                self.log.log(
+                    "skip",
+                    {
+                        "market_ticker": str(market_ticker),
+                        "side": str(pos.get("side") or ""),
+                        "skip_reason": "exit_no_bid",
+                    },
+                )
+                continue
+
+            if self._submit_exit_order(
+                market_ticker=str(market_ticker),
+                event_ticker=str(pos.get("event_ticker") or result.event_ticker),
+                side=str(pos.get("side") or ""),
+                sell_count=int(sell_count),
+                bid_cents=int(decision.bid_cents),
+                p_yes=float(row.p_model),
+                reason=str(decision.reason),
+            ):
+                changed = True
+        return changed, exited_markets
 
     # ---- candidate building ----
 
@@ -627,28 +926,39 @@ class Trader:
                 row = by_ticker.get(str(tracked2.get("market_ticker")))
                 p_yes = float(row.p_model) if row is not None else float(tracked2.get("last_model_p") or 0.5)
                 side = str(tracked2.get("side"))
-                p_win = p_yes if side == "yes" else (1.0 - p_yes)
                 price_cents = delta.avg_price_cents if delta.avg_price_cents is not None else _as_int(tracked2.get("price_cents"), 0)
                 fee_cents = delta.avg_fee_cents if delta.avg_fee_cents is not None else (self.fee_cents_maker if str(tracked2.get("source")) == "maker" else self.fee_cents_taker)
-                edge_pp = self._edge_at_price(p_win=p_win, price_cents=int(price_cents), fee_cents=int(fee_cents))
-                was_open = self._apply_fill(
-                    market_ticker=str(tracked2.get("market_ticker")),
-                    event_ticker=str(tracked2.get("event_ticker")),
-                    side=side,
-                    fill_count=int(delta.delta_fill_count),
-                    price_cents=int(price_cents),
-                    fee_cents=int(fee_cents),
-                    p_yes=float(p_yes),
-                    edge_pp=float(edge_pp),
-                    source=str(tracked2.get("source")),
-                    order_id=str(tracked2.get("order_id")),
-                    strike=float(row.strike) if row is not None else None,
-                    subtitle=str(row.subtitle) if row is not None else None,
-                    implied_q_yes=(float(row.ob.ybuy) / 100.0) if (row is not None and row.ob.ybuy is not None) else None,
-                    ts_utc=delta.ts_utc,
-                )
-                self.log.log("fill_detected", {"order_id": oid, "delta_fill_count": int(delta.delta_fill_count), "was_open": bool(was_open)})
-                self.log.log("scale_in_filled" if was_open else "entry_filled", {"order_id": oid, "count": int(delta.delta_fill_count)})
+                if str(tracked2.get("action") or "buy").lower() == "sell":
+                    self._apply_exit_fill(
+                        market_ticker=str(tracked2.get("market_ticker")),
+                        sell_count=int(delta.delta_fill_count),
+                        price_cents=int(price_cents),
+                        fee_cents=int(fee_cents),
+                        order_id=str(tracked2.get("order_id")),
+                        reason=str(tracked2.get("exit_reason") or "exit_signal"),
+                    )
+                    self.log.log("fill_detected", {"order_id": oid, "delta_fill_count": int(delta.delta_fill_count), "was_open": True})
+                else:
+                    p_win = p_yes if side == "yes" else (1.0 - p_yes)
+                    edge_pp = self._edge_at_price(p_win=p_win, price_cents=int(price_cents), fee_cents=int(fee_cents))
+                    was_open = self._apply_fill(
+                        market_ticker=str(tracked2.get("market_ticker")),
+                        event_ticker=str(tracked2.get("event_ticker")),
+                        side=side,
+                        fill_count=int(delta.delta_fill_count),
+                        price_cents=int(price_cents),
+                        fee_cents=int(fee_cents),
+                        p_yes=float(p_yes),
+                        edge_pp=float(edge_pp),
+                        source=str(tracked2.get("source")),
+                        order_id=str(tracked2.get("order_id")),
+                        strike=float(row.strike) if row is not None else None,
+                        subtitle=str(row.subtitle) if row is not None else None,
+                        implied_q_yes=(float(row.ob.ybuy) / 100.0) if (row is not None and row.ob.ybuy is not None) else None,
+                        ts_utc=delta.ts_utc,
+                    )
+                    self.log.log("fill_detected", {"order_id": oid, "delta_fill_count": int(delta.delta_fill_count), "was_open": bool(was_open)})
+                    self.log.log("scale_in_filled" if was_open else "entry_filled", {"order_id": oid, "count": int(delta.delta_fill_count)})
                 changed = True
             if _is_terminal(str(tracked2.get("status", "")).lower()) or _as_int(tracked2.get("remaining_count"), 0) <= 0:
                 self._cleanup_order_refs(oid)
@@ -771,6 +1081,7 @@ class Trader:
             {
                 "mode": cand.source,
                 "source": cand.source,
+                "action": "buy",
                 "market_ticker": cand.market_ticker,
                 "side": cand.side,
                 "count": int(remaining_to_target),
@@ -792,6 +1103,7 @@ class Trader:
             last_model_p=float(cand.p_yes),
             last_edge_pp=float(cand.edge_pp),
             fee_cents_per_contract=int(cand.fee_cents),
+            action="buy",
         )
         oid = str(tracked.get("order_id"))
         self.open_orders[oid] = tracked
@@ -846,11 +1158,16 @@ class Trader:
             changed = True
 
         by_ticker = {str(r.ticker): r for r in result.rows}
+        exit_changed, exited_markets = self._process_exit_signals(result, by_ticker)
+        if exit_changed:
+            changed = True
         for key, oid in list(self.active_order_by_market.items()):
             tracked = self.open_orders.get(oid)
             if not isinstance(tracked, dict):
                 self.active_order_by_market.pop(key, None)
                 changed = True
+                continue
+            if str(tracked.get("action") or "buy").lower() != "buy":
                 continue
             if str(tracked.get("source")) != "maker":
                 continue
@@ -882,11 +1199,17 @@ class Trader:
         n = max(0, int(self.log_top_n_candidates))
         for cand in cands[:n]:
             self.log.log("candidate", self._cand_log_fields(cand, result))
+        if should_pause_new_entries(minutes_left=float(result.minutes_left), exit_minutes_left=float(self.exit_minutes_left)):
+            if changed:
+                self._persist_state_file()
+            return
         submitted = 0
 
         for cand in cands:
             if submitted >= int(self.max_entries_per_tick):
                 break
+            if cand.market_ticker in exited_markets:
+                continue
 
             pos = self.open_positions.get(cand.market_ticker)
             if pos is not None and str(pos.get("side")) and str(pos.get("side")) != str(cand.side):
@@ -945,6 +1268,17 @@ class Trader:
                 continue
 
             add_cost = float(remaining) * ((float(cand.price_cents) + float(cand.fee_cents)) / 100.0)
+            bankroll_dollars = max(0.0, self.starting_bankroll_dollars + self.realized_pnl_total)
+            available_cash = max(0.0, bankroll_dollars - float(self.total_cost_all))
+            cost_per_contract = float(cand.price_cents + cand.fee_cents) / 100.0
+            if cost_per_contract > 0:
+                remaining = min(int(remaining), int(math.floor(available_cash / cost_per_contract)))
+            if remaining <= 0:
+                payload = {"market_ticker": cand.market_ticker, "side": cand.side, "skip_reason": "insufficient_available_cash"}
+                payload.update(self._cand_log_fields(cand, result))
+                self.log.log("skip", payload)
+                continue
+            add_cost = float(remaining) * ((float(cand.price_cents) + float(cand.fee_cents)) / 100.0)
             is_new_market_in_event = int(_as_int(pos.get("total_count"), 0) if pos else 0) <= 0
             cap_reason = self._cap_check(
                 event_ticker=cand.event_ticker,
@@ -972,6 +1306,7 @@ class Trader:
             "schema": SCHEMA,
             "positions_count_all": int(self.positions_count_all),
             "total_cost_all": float(self.total_cost_all),
+            "realized_pnl_total": float(self.realized_pnl_total),
             "open_positions": self.open_positions,
             "open_orders": self.open_orders,
             "active_order_by_market": self.active_order_by_market,

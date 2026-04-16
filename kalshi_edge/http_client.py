@@ -36,6 +36,8 @@ class HttpClient:
         if self.debug:
             print(f"status={r.status_code} bytes={len(r.content)}")
 
+        if r.status_code >= 400:
+            print(f"Kalshi Error Details: {r.text}")
         r.raise_for_status()
         data = r.json()
 
@@ -63,6 +65,8 @@ class HttpClient:
                 # Prefix-only: response bodies can be huge
                 print(f"error_body={r.text[:400]}")
 
+        if r.status_code >= 400:
+            print(f"Kalshi Error Details: {r.text}")
         r.raise_for_status()
         return r.json()
 
@@ -89,5 +93,7 @@ class HttpClient:
                 # Keep debug output bounded and readable.
                 print(f"error_body={r.text[:400]}")
 
+        if r.status_code >= 400:
+            print(f"Kalshi Error Details: {r.text}")
         r.raise_for_status()
         return r.json()

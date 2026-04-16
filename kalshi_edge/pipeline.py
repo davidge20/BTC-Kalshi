@@ -42,6 +42,7 @@ def evaluate_event(
     mc_steps: int = 60,
     debug_http: bool = False,
     vol_model: object | None = None,
+    live_iv_cache_path: str | None = None,
 ) -> EvaluationResult:
     """
     Evaluate a single Kalshi event.
@@ -49,15 +50,15 @@ def evaluate_event(
     Supply either ``event="KXBTCD-..."`` or ``url="https://kalshi.com/..."``.
 
     Volatility priority:
-      1. Encompassing Regression (vol_model.predict)  ← new primary
+      1. Encompassing Regression (weighted IV/RV proxy + RV)
       2. GARCH(1,1) on Coinbase 1-min returns
-      3. Heuristic IV/RV blend                        (fallback)
+      3. Weighted IV/RV blend                        (fallback)
 
     Parameters
     ----------
     vol_model : VolatilityRegression | None
-        A fitted regression model.  When provided, ``adjusted_sigma`` from
-        the DVOL/RV regression becomes the primary volatility for both
+        A fitted regression model. When provided, ``adjusted_sigma`` from
+        the weighted IV/RV regression becomes the primary volatility for both
         the analytical and Monte Carlo models.
     """
     if not event and not url:
@@ -76,6 +77,7 @@ def evaluate_event(
         minutes_left=minutes_left,
         iv_band_pct=iv_band_pct,
         vol_model=vol_model,
+        live_iv_cache_path=live_iv_cache_path,
     )
 
     rows = evaluate_ladder(
@@ -112,7 +114,7 @@ def compare_pricing_models(
     spot: float,
     strike: float,
     minutes_left: float,
-    dvol_current: float,
+    iv_proxy_current: float,
     rv_trailing: float,
     sigma_adjusted: float,
     mc_paths: int = 10_000,
@@ -139,7 +141,7 @@ def compare_pricing_models(
         "spot": spot,
         "strike": strike,
         "minutes_left": minutes_left,
-        "DVOL_Current": dvol_current,
+        "IV_Proxy_Current": iv_proxy_current,
         "RV_Trailing": rv_trailing,
         "adjusted_sigma": sigma_adjusted,
         "stochastic_prob": stochastic_prob,

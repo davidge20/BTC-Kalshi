@@ -1,15 +1,15 @@
 """
 vol_regression.py — Encompassing Regression for optimal volatility blending.
 
-Combines Deribit's DVOL index (forward-looking implied vol) with Coinbase's
-trailing realized volatility to produce an adjusted_sigma via OLS regression.
+Uses a weighted Deribit implied-vol proxy together with trailing realized
+volatility to produce an adjusted_sigma via OLS regression.
 
 The pipeline (no lookahead bias):
   1. Fetch historical Coinbase 1-min candles → rolling 60-min RV, hourly snapshots
-  2. Fetch historical Deribit DVOL hourly snapshots
-  3. Align on top-of-hour timestamps, create forward-looking target
-  4. Fit OLS: Target_RV_Forward ~ β₀ + β₁·DVOL_Current + β₂·RV_Trailing
-  5. At runtime, predict adjusted_sigma from live DVOL + live RV
+  2. Fetch historical Deribit DVOL hourly snapshots as the historical implied proxy
+  3. Align on top-of-hour timestamps, create the weighted implied/RV feature
+  4. Fit OLS: Target_RV_Forward ~ β₀ + β₁·IV_Proxy_Current + β₂·RV_Trailing
+  5. At runtime, predict adjusted_sigma from live weighted IV/RV + live RV
 """
 
 from __future__ import annotations
@@ -26,13 +26,15 @@ from sklearn.linear_model import LinearRegression
 from kalshi_edge.constants import DERIBIT, MINUTES_PER_YEAR
 from kalshi_edge.http_client import HttpClient
 from kalshi_edge.backtesting.coinbase_history import fetch_coinbase_candles_1m
+from kalshi_edge.live_iv_cache import read_live_iv_snapshots
+from kalshi_edge.market_state import blend_vol, fixed_live_blend
 
 _log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Historical data fetchers
-# ---------------------------------------------------------------------------
-
+LEGACY_FEATURE_COL = "DVOL_Current"
+FEATURE_COL = "IV_Proxy_Current"
+RV_COL = "RV_Trailing"
+TARGET_COL = "Target_RV_Forward"
 
 def fetch_deribit_dvol_hourly(
     http: HttpClient,
@@ -41,11 +43,7 @@ def fetch_deribit_dvol_hourly(
     currency: str = "BTC",
 ) -> pd.DataFrame:
     """
-    Fetch hourly Deribit DVOL index snapshots.
-
-    Returns a DataFrame with a UTC DatetimeIndex (top-of-hour) and a single
-    column ``DVOL_Current`` expressed as an annualized decimal
-    (e.g. DVOL 60 → 0.60).
+    Backtest helper: fetch hourly Deribit DVOL index snapshots.
     """
     start_ms = int(start_ts) * 1000
     end_ms = int(end_ts) * 1000
@@ -78,21 +76,16 @@ def fetch_deribit_dvol_hourly(
         else:
             break
 
-        _time.sleep(0.1)  # polite rate-limit padding
+        _time.sleep(0.1)
 
     if not all_rows:
-        return pd.DataFrame(columns=["DVOL_Current"])
+        return pd.DataFrame({LEGACY_FEATURE_COL: pd.Series(dtype=float)})
 
-    df = pd.DataFrame(all_rows, columns=["ts_ms", "dvol_close"])
+    df = pd.DataFrame.from_records(all_rows, columns=("ts_ms", "dvol_close"))
     df["datetime"] = pd.to_datetime(df["ts_ms"], unit="ms", utc=True)
     df = df.set_index("datetime").sort_index()
-    df["DVOL_Current"] = df["dvol_close"] / 100.0
-    return pd.DataFrame(df[["DVOL_Current"]])
-
-
-# ---------------------------------------------------------------------------
-# Step 1 — Historical Data Pipeline & Alignment
-# ---------------------------------------------------------------------------
+    df[LEGACY_FEATURE_COL] = df["dvol_close"] / 100.0
+    return pd.DataFrame(df[[LEGACY_FEATURE_COL]])
 
 
 def build_training_data(
@@ -101,11 +94,79 @@ def build_training_data(
     product: str = "BTC-USD",
 ) -> pd.DataFrame:
     """
-    Build a strictly aligned historical DataFrame for regression training.
+    Backtest helper: build training data from historical DVOL + RV.
+    """
+    now = datetime.now(timezone.utc)
+    end_ts = int(now.timestamp())
+    start_ts = end_ts - (lookback_hours + 2) * 3600
+
+    candles = fetch_coinbase_candles_1m(http, start_ts, end_ts, product=product)
+    if len(candles) < 120:
+        raise RuntimeError(
+            f"Insufficient Coinbase candles for regression training: got {len(candles)}, need ≥120"
+        )
+
+    cb_df = pd.DataFrame(candles)
+    cb_df["datetime"] = pd.to_datetime(cb_df["minute_end_ts"], unit="s", utc=True)
+    cb_df = cb_df.set_index("datetime").sort_index()
+
+    closes = cb_df["close"]
+    log_rets = np.log(closes / closes.shift(1)).dropna()
+    rv_rolling = (
+        log_rets.rolling(window=60, min_periods=60).std(ddof=0) * np.sqrt(MINUTES_PER_YEAR)
+    ).dropna()
+    rv_hourly = rv_rolling[rv_rolling.index.minute == 0].copy()
+    rv_hourly.name = RV_COL
+
+    dvol_df = fetch_deribit_dvol_hourly(http, start_ts, end_ts)
+    if dvol_df.empty:
+        raise RuntimeError("No Deribit DVOL data returned for the training period")
+    dvol_df.index = dvol_df.index.round("h")  # type: ignore[union-attr]
+    dvol_df = dvol_df[~dvol_df.index.duplicated(keep="last")]
+
+    merged = pd.merge(rv_hourly.to_frame(), dvol_df, left_index=True, right_index=True, how="inner")
+    merged[FEATURE_COL] = [
+        implied_vol_proxy(float(implied), float(realized))
+        for implied, realized in zip(merged[LEGACY_FEATURE_COL], merged[RV_COL])
+    ]
+    merged[TARGET_COL] = merged[RV_COL].shift(-1)
+    return merged.dropna()
+
+
+def implied_vol_proxy(implied_current: float, rv_trailing: float) -> float:
+    """
+    Weighted implied/realized feature used by both backtest and live inference.
+
+    Historical backtests use DVOL as the Deribit implied-vol proxy; live trading
+    uses the near-ATM Deribit options IV.
+    """
+    proxy, _ = blend_vol(float(implied_current), float(rv_trailing))
+    return float(proxy)
+
+
+def fixed_live_iv_proxy(implied_current: float, rv_trailing: float) -> float:
+    proxy, _ = fixed_live_blend(float(implied_current), float(rv_trailing))
+    return float(proxy)
+
+
+# ---------------------------------------------------------------------------
+# Step 1 — Historical Data Pipeline & Alignment
+# ---------------------------------------------------------------------------
+
+
+def build_live_training_data(
+    http: HttpClient,
+    iv_cache_path: str,
+    lookback_hours: int = 168,
+    min_obs: int = 24,
+    product: str = "BTC-USD",
+) -> pd.DataFrame:
+    """
+    Build a strictly aligned live-training DataFrame from cached ATM IV snapshots.
 
     Columns produced
     ----------------
-    DVOL_Current      : Deribit DVOL at top of hour (annualized decimal).
+    IV_Proxy_Current  : fixed 75/25 implied/RV proxy at top of hour (annualized).
     RV_Trailing       : trailing 60-min realized vol at top of hour (annualized).
     Target_RV_Forward : next hour's trailing RV — the regression target.
 
@@ -147,30 +208,51 @@ def build_training_data(
     rv_hourly = rv_rolling[rv_rolling.index.minute == 0].copy()
     rv_hourly.name = "RV_Trailing"
 
-    # --- Deribit DVOL (The Expectation) -------------------------------
-    _log.info("Fetching %d hours of Deribit DVOL data…", lookback_hours + 2)
-    dvol_df = fetch_deribit_dvol_hourly(http, start_ts, end_ts)
+    # --- Cached live Deribit ATM IV snapshots -------------------------
+    records = read_live_iv_snapshots(iv_cache_path)
+    iv_rows: list[tuple[int, float]] = []
+    for rec in records:
+        try:
+            ts_s = int(rec["ts_s"])
+            sigma_implied = float(rec["sigma_implied"])
+        except Exception:
+            continue
+        if sigma_implied <= 0:
+            continue
+        if ts_s < start_ts or ts_s > end_ts:
+            continue
+        iv_rows.append((ts_s, sigma_implied))
 
-    if dvol_df.empty:
-        raise RuntimeError(
-            "No Deribit DVOL data returned for the training period"
-        )
+    if not iv_rows:
+        raise RuntimeError("No cached live implied-vol data available for regression training")
 
-    # Floor to top-of-hour so both series share the same key
-    dvol_df.index = dvol_df.index.round("h")  # type: ignore[union-attr]
-    dvol_df = dvol_df[~dvol_df.index.duplicated(keep="last")]
+    iv_df = pd.DataFrame.from_records(iv_rows, columns=("ts_s", "sigma_implied"))
+    iv_df["datetime"] = pd.to_datetime(iv_df["ts_s"], unit="s", utc=True)
+    iv_df = iv_df.set_index("datetime").sort_index()
+    iv_df[LEGACY_FEATURE_COL] = iv_df["sigma_implied"]
+    iv_df.index = iv_df.index.round("h")  # type: ignore[union-attr]
+    iv_df = iv_df[~iv_df.index.duplicated(keep="last")]
 
     # --- Alignment & Target Generation --------------------------------
     merged = pd.merge(
         rv_hourly.to_frame(),
-        dvol_df,
+        iv_df[[LEGACY_FEATURE_COL]],
         left_index=True,
         right_index=True,
         how="inner",
     )
 
-    merged["Target_RV_Forward"] = merged["RV_Trailing"].shift(-1)
+    merged[FEATURE_COL] = [
+        fixed_live_iv_proxy(float(implied), float(realized))
+        for implied, realized in zip(merged[LEGACY_FEATURE_COL], merged[RV_COL])
+    ]
+    merged[TARGET_COL] = merged[RV_COL].shift(-1)
     merged = merged.dropna()
+    if len(merged) < int(min_obs):
+        raise RuntimeError(
+            f"Insufficient cached live implied-vol observations for regression training: "
+            f"got {len(merged)}, need >= {int(min_obs)}"
+        )
 
     _log.info(
         "Training data ready: %d aligned hourly observations [%s … %s]",
@@ -188,12 +270,12 @@ def build_training_data(
 
 class VolatilityRegression:
     """
-    Encompassing Regression for optimal DVOL / RV blending.
+    Encompassing Regression for live implied-vol / RV blending.
 
     Model:
-        Target_RV_Forward ~ β₀ + β₁·DVOL_Current + β₂·RV_Trailing
+        Target_RV_Forward ~ β₀ + β₁·IV_Proxy_Current + β₂·RV_Trailing
 
-    After fitting, call ``predict(dvol_current, rv_trailing)`` to obtain
+    After fitting, call ``predict(iv_proxy_current, rv_trailing)`` to obtain
     the regression-adjusted sigma for the next hour.
     """
 
@@ -203,6 +285,7 @@ class VolatilityRegression:
         self.coefficients: Optional[np.ndarray] = None
         self.intercept: float = 0.0
         self.n_obs: int = 0
+        self.feature_name: str = FEATURE_COL
 
     @property
     def is_fitted(self) -> bool:
@@ -217,7 +300,8 @@ class VolatilityRegression:
         Fit the OLS regression on a training DataFrame produced by
         :func:`build_training_data`.
         """
-        required = {"DVOL_Current", "RV_Trailing", "Target_RV_Forward"}
+        feature_col = FEATURE_COL if FEATURE_COL in df.columns else LEGACY_FEATURE_COL
+        required = {feature_col, RV_COL, TARGET_COL}
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Missing columns: {missing}")
@@ -227,8 +311,8 @@ class VolatilityRegression:
                 f"Need ≥10 observations for a meaningful regression, got {len(df)}"
             )
 
-        X = df[["DVOL_Current", "RV_Trailing"]].values
-        y = df["Target_RV_Forward"].values
+        X = df[[feature_col, RV_COL]].values
+        y = df[TARGET_COL].values
 
         model = LinearRegression()
         model.fit(X, y)
@@ -238,13 +322,17 @@ class VolatilityRegression:
         self.coefficients = model.coef_.copy()
         self.intercept = float(model.intercept_)
         self.n_obs = len(df)
+        self.feature_name = feature_col
+        coeffs = self.coefficients
+        if coeffs is None:
+            raise RuntimeError("Regression coefficients missing after fit")
 
         _log.info(
-            "Regression fit: R²=%.4f  β₀=%.6f  β_dvol=%.4f  β_rv=%.4f  n=%d",
+            "Regression fit: R²=%.4f  β₀=%.6f  β_iv_proxy=%.4f  β_rv=%.4f  n=%d",
             self.r_squared,
             self.intercept,
-            self.coefficients[0],
-            self.coefficients[1],
+            coeffs[0],
+            coeffs[1],
             self.n_obs,
         )
         return self
@@ -253,14 +341,14 @@ class VolatilityRegression:
     # Prediction
     # ------------------------------------------------------------------
 
-    def predict(self, dvol_current: float, rv_trailing: float) -> float:
+    def predict(self, iv_proxy_current: float, rv_trailing: float) -> float:
         """
         Predict adjusted_sigma for the next hour from live market inputs.
 
         Parameters
         ----------
-        dvol_current : float
-            Current Deribit DVOL as annualized decimal (DVOL 60 → 0.60).
+        iv_proxy_current : float
+            Current weighted implied/RV proxy as annualized decimal.
         rv_trailing : float
             Trailing 60-min annualized realized vol (decimal).
 
@@ -273,7 +361,7 @@ class VolatilityRegression:
         if self._model is None:
             raise RuntimeError("Model not fitted — call fit() first.")
 
-        X = np.array([[dvol_current, rv_trailing]])
+        X = np.array([[iv_proxy_current, rv_trailing]])
         pred = float(self._model.predict(X)[0])
         return max(pred, 1e-6)
 
@@ -281,15 +369,35 @@ class VolatilityRegression:
     # Convenience
     # ------------------------------------------------------------------
 
+    def fit_from_live_cache(
+        self,
+        http: HttpClient,
+        iv_cache_path: str,
+        lookback_hours: int = 168,
+        min_obs: int = 24,
+        product: str = "BTC-USD",
+    ) -> "VolatilityRegression":
+        """Build training data from cached live ATM IV history and fit."""
+        df = build_live_training_data(
+            http,
+            iv_cache_path=iv_cache_path,
+            lookback_hours=lookback_hours,
+            min_obs=min_obs,
+            product=product,
+        )
+        return self.fit(df)
+
     def fit_from_api(
         self,
         http: HttpClient,
         lookback_hours: int = 168,
         product: str = "BTC-USD",
     ) -> "VolatilityRegression":
-        """Fetch training data and fit in a single call."""
+        """Backtest-compatible helper using historical DVOL + RV."""
         df = build_training_data(
-            http, lookback_hours=lookback_hours, product=product,
+            http,
+            lookback_hours=lookback_hours,
+            product=product,
         )
         return self.fit(df)
 
@@ -301,7 +409,7 @@ class VolatilityRegression:
             f"VolatilityRegression("
             f"R²={self.r_squared:.4f}, "
             f"β₀={self.intercept:.6f}, "
-            f"β_dvol={self.coefficients[0]:.4f}, "
+            f"β_iv_proxy={self.coefficients[0]:.4f}, "
             f"β_rv={self.coefficients[1]:.4f}, "
             f"n={self.n_obs})"
         )

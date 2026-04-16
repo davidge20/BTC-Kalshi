@@ -104,6 +104,7 @@ class OrderManager:
         source: str,
         status: str,
         client_order_id: str,
+        action: str = "buy",
     ) -> Dict[str, Any]:
         now = utc_ts()
         return {
@@ -112,7 +113,7 @@ class OrderManager:
             "market_ticker": str(market_ticker),
             "event_ticker": str(event_ticker),
             "side": str(side),
-            "action": "buy",
+            "action": str(action),
             "type": "limit",
             "price_cents": int(price_cents),
             "count": int(count),
@@ -193,6 +194,7 @@ class OrderManager:
         last_edge_pp: float,
         fee_cents_per_contract: Optional[int] = None,
         extra_payload: Optional[Dict[str, Any]] = None,
+        action: str = "buy",
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Create an order and return (tracked_order_dict, raw_response_dict).
@@ -200,7 +202,7 @@ class OrderManager:
         client_order_id = str(uuid.uuid4())
         payload: Dict[str, Any] = {
             "ticker": str(market_ticker),
-            "action": "buy",
+            "action": str(action),
             "side": str(side),
             "count": int(count),
             "type": "limit",
@@ -233,6 +235,7 @@ class OrderManager:
                 last_edge_pp=last_edge_pp,
                 source=source,
                 status="executed",
+                action=action,
             )
             tracked["fill_count"] = int(count)
             tracked["remaining_count"] = 0
@@ -256,6 +259,7 @@ class OrderManager:
                 last_edge_pp=last_edge_pp,
                 source=source,
                 status="resting",
+                action=action,
             )
             return tracked, {"order": tracked}
 
@@ -277,6 +281,7 @@ class OrderManager:
             last_edge_pp=last_edge_pp,
             source=source,
             status=status or "unknown",
+            action=action,
         )
         tracked["fill_count"] = _as_int(o.get("fill_count"), 0)
         tracked["remaining_count"] = _as_int(o.get("remaining_count"), int(count))
@@ -309,7 +314,7 @@ class OrderManager:
         amend_payload: Dict[str, Any] = {
             "ticker": str(tracked["market_ticker"]),
             "side": str(tracked["side"]),
-            "action": "buy",
+            "action": str(tracked.get("action") or "buy"),
             "client_order_id": str(tracked["client_order_id"]),
             "updated_client_order_id": updated_client_order_id,
         }

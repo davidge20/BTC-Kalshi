@@ -4,9 +4,11 @@ import unittest
 
 from kalshi_edge.backtesting.backtest_engine import (
     annualized_realized_vol_from_closes,
+    desired_total_contracts,
     dollars_to_cents,
     derive_no_quotes,
     edge_at_price,
+    kelly_fraction_binary,
     max_acceptable_price_cents,
     rolling_annualized_realized_vol,
 )
@@ -44,6 +46,12 @@ class TestRealizedVol(unittest.TestCase):
         last_expected = annualized_realized_vol_from_closes(closes[-window:])
         self.assertAlmostEqual(series[-1], last_expected, places=12)
 
+    def test_single_return_window_uses_absolute_move_proxy(self) -> None:
+        closes = [100.0, 101.0]
+        expected = abs(math.log(101.0 / 100.0)) * math.sqrt(MINUTES_PER_YEAR)
+        got = annualized_realized_vol_from_closes(closes)
+        self.assertAlmostEqual(got, expected, places=12)
+
 
 class TestPricingLogic(unittest.TestCase):
     def test_max_acceptable_price_and_edge_consistency(self) -> None:
@@ -57,6 +65,24 @@ class TestPricingLogic(unittest.TestCase):
 
         self.assertGreaterEqual(ev_at_max, min_ev - 0.01)
         self.assertLess(ev_above, min_ev)
+
+    def test_kelly_fraction_binary(self) -> None:
+        got = kelly_fraction_binary(p_win=0.40, total_cost_dollars=0.31)
+        self.assertAlmostEqual(got, (0.40 - 0.31) / (1.0 - 0.31), places=12)
+
+    def test_desired_total_contracts_kelly(self) -> None:
+        got = desired_total_contracts(
+            sizing_mode="kelly",
+            order_size=1,
+            max_contracts_per_market=100,
+            price_cents=30,
+            fee_cents=1,
+            p_win=0.40,
+            bankroll_dollars=100.0,
+            kelly_fraction_scale=0.5,
+            current_contracts=0,
+        )
+        self.assertEqual(got, 21)
 
 
 if __name__ == "__main__":

@@ -75,8 +75,20 @@ def main() -> int:
     )
     print(f"[backtest] log path: {log_path}")
     print("[backtest] vol model: regression (DVOL+RV) > GARCH(1,1) > trailing RV")
-    print("[backtest] fill model: taker-only (immediate fill at ask)")
+    print("[backtest] fill model: taker-only (entries at ask, exits at bid/settlement)")
+    step_seconds = int(bt.STEP_SECONDS) if bt.STEP_SECONDS is not None else int(bt.STEP_MINUTES) * 60
+    print(f"[backtest] cadence: every {step_seconds}s")
+    print(f"[backtest] realized vol window: {int(bt.REALIZED_VOL_WINDOW_MINUTES)} minute(s)")
+    if str(bt.POSITION_SIZING_MODE) == "kelly":
+        print(
+            f"[backtest] sizing: Kelly x {float(bt.KELLY_FRACTION):.2f} "
+            f"on starting bankroll ${float(bt.STARTING_BANKROLL_DOLLARS):.2f}"
+        )
+    else:
+        print(f"[backtest] sizing: fixed order size ({int(cfg.ORDER_SIZE)} contract step)")
     print("[backtest] note: MIN_TOP_SIZE gate is ignored (candles do not include depth/top-size).")
+    if step_seconds < 60:
+        print("[backtest] note: sub-minute checks reuse the latest available 1m candle until the next candle prints.")
 
     try:
         from kalshi_edge.http_client import HttpClient

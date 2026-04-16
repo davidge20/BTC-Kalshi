@@ -1,16 +1,20 @@
 """
-monte_carlo.py — GBM Monte Carlo simulation for binary option pricing.
+monte_carlo.py — Student's t-distribution Monte Carlo simulation.
 
-Simulates many price paths under Geometric Brownian Motion with zero drift
-to estimate P(S_T ≥ K).  While the analytical lognormal model gives
-the exact answer under the same assumptions, the MC framework is kept
-because it extends naturally to jump-diffusion or stochastic-vol models.
+Simulates price paths using a Student's t-distribution to better capture 
+Bitcoin's fat tails compared to standard Geometric Brownian Motion (lognormal).
 
 Usage:
-    # Generate terminal prices once, reuse across all strikes
-    terminals = monte_carlo_terminal_prices(spot, sigma, minutes_left)
-    p1 = mc_prob_above(terminals, strike_1)
-    p2 = mc_prob_above(terminals, strike_2)
+    # Convert DVOL (annualized) to hourly vol
+    hourly_vol = dvol_annualized / math.sqrt(365 * 24)
+    
+    # Calculate probability
+    prob = t_dist_prob_above(
+        current_price=70781,
+        strike_price=71000,
+        hourly_vol=hourly_vol,
+        time_remaining_hours=2.5
+    )
 """
 
 from __future__ import annotations
@@ -19,74 +23,85 @@ import math
 from typing import Optional
 
 import numpy as np
+from scipy.stats import t
 
-from kalshi_edge.constants import MINUTES_PER_YEAR
-
-
-def monte_carlo_terminal_prices(
-    spot: float,
-    sigma_ann: float,
-    minutes_left: float,
-    n_paths: int = 10_000,
-    n_steps: int = 60,
+def simulate_t_dist_terminal_prices(
+    current_price: float,
+    hourly_vol: float,
+    time_remaining_hours: float,
+    df: float = 3.0,
+    n_paths: int = 100_000,
     seed: Optional[int] = None,
 ) -> np.ndarray:
     """
-    Simulate GBM paths and return terminal prices.
-
-    GBM step (zero drift):
-        S_{t+dt} = S_t · exp((-σ²/2)·dt + σ·√dt·Z)
+    Simulate terminal prices using a Student's t-distribution.
+    
+    Args:
+        current_price: Current price of the asset.
+        hourly_vol: Volatility per hour (e.g., 0.012 for 1.2%).
+        time_remaining_hours: Time remaining until expiry in hours.
+        df: Degrees of freedom for the t-distribution (default 3 for fat tails).
+        n_paths: Number of Monte Carlo simulations to run.
+        seed: Optional random seed for reproducibility.
+        
+    Returns:
+        Array of simulated terminal prices.
     """
-    if minutes_left <= 0 or sigma_ann <= 0:
-        return np.full(n_paths, spot)
+    if time_remaining_hours <= 0 or hourly_vol <= 0:
+        return np.full(n_paths, current_price)
 
     rng = np.random.default_rng(seed)
 
-    dt = (minutes_left / MINUTES_PER_YEAR) / n_steps
-    drift = -0.5 * sigma_ann**2 * dt
-    diffusion = sigma_ann * math.sqrt(dt)
+    # Scale the hourly volatility to the remaining time 'T'
+    sigma_t = hourly_vol * math.sqrt(time_remaining_hours)
 
-    z = rng.standard_normal((n_paths, n_steps))
-    log_increments = drift + diffusion * z
-    log_total = log_increments.sum(axis=1)
+    # Generate random returns from a standard t-distribution
+    # We use scipy.stats.t.rvs or numpy's standard_t. Numpy is generally faster for large arrays.
+    standard_t_returns = rng.standard_t(df, size=n_paths)
+    
+    # Scale returns by our time-adjusted volatility (assuming drift = 0)
+    simulated_returns = sigma_t * standard_t_returns
 
-    return spot * np.exp(log_total)
+    # Calculate final prices: Price_final = current_price * exp(simulated_return)
+    terminal_prices = current_price * np.exp(simulated_returns)
 
-
-def mc_prob_above(terminal_prices: np.ndarray, strike: float) -> float:
-    """Fraction of simulated paths ending at or above *strike*."""
-    if terminal_prices.size == 0:
-        return 0.0
-    return float(np.mean(terminal_prices >= strike))
+    return terminal_prices
 
 
-def run_monte_carlo_simulation(
-    spot: float,
-    strike: float,
-    sigma: float,
-    minutes_left: float = 60.0,
-    n_paths: int = 10_000,
-    n_steps: int = 60,
+def t_dist_prob_above(
+    current_price: float,
+    strike_price: float,
+    hourly_vol: float,
+    time_remaining_hours: float,
+    df: float = 3.0,
+    n_paths: int = 100_000,
     seed: Optional[int] = None,
 ) -> float:
     """
-    High-level GBM Monte Carlo: returns P(S_T ≥ strike) directly.
-
-    Designed for 1-hour Kalshi prediction markets.  Uses ``adjusted_sigma``
-    from the encompassing regression as the volatility input.
-
-    GBM step (zero drift):
-        S_{t+Δt} = S_t · exp((-σ²/2)·Δt + σ·√Δt·Z)
-
-    With minutes_left=60 and n_steps=60, each step is Δt = 1/525600
-    (one minute in years), giving a minute-by-minute simulation.
+    Calculate the probability of the price ending > strike_price using a t-distribution.
     """
-    terminals = monte_carlo_terminal_prices(
-        spot=spot,
-        sigma_ann=sigma,
-        minutes_left=minutes_left,
+    terminal_prices = simulate_t_dist_terminal_prices(
+        current_price=current_price,
+        hourly_vol=hourly_vol,
+        time_remaining_hours=time_remaining_hours,
+        df=df,
         n_paths=n_paths,
-        n_steps=n_steps,
         seed=seed,
     )
-    return mc_prob_above(terminals, strike)
+    
+    # Output: The probability (0.0 to 1.0) of the price ending > strike_price
+    return float(np.mean(terminal_prices > strike_price))
+
+
+def convert_annualized_vol_to_hourly(sigma_ann: float) -> float:
+    """
+    Helper to convert annualized volatility (like Deribit DVOL) to hourly volatility.
+    
+    Args:
+        sigma_ann: Annualized volatility as a decimal (e.g., 0.60 for 60% DVOL).
+        
+    Returns:
+        Hourly volatility.
+    """
+    # 365 days * 24 hours = 8760 hours in a year
+    return sigma_ann / math.sqrt(365 * 24)

@@ -59,19 +59,7 @@ def render_once(
         print(_clip_line(line, max_width))
 
     if compact:
-        if ms.sigma_adjusted > 0:
-            vol_label = "regression"
-        elif ms.sigma_garch > 0:
-            vol_label = "GARCH"
-        else:
-            vol_label = "blend"
-        emit(
-            f"{result.event_ticker} | left {ms.minutes_left:.1f}m | "
-            f"spot ${ms.spot:,.2f} | {vol_label} {ms.sigma_blend*100:.1f}% | "
-            f"1σ {ms.one_sigma_move_pct:.2f}% | {ms.confidence}"
-        )
-        if ms.note:
-            emit(f"Notes: {ms.note}")
+        print_compact_summary_table(result, max_width=max_width)
     else:
         emit("=== Summary ===")
         emit(f"Event ticker:          {result.event_ticker}")
@@ -79,8 +67,6 @@ def render_once(
         emit(f"UTC time:              {ms.ts_utc.isoformat()}")
         emit(f"Minutes left:          {ms.minutes_left:.2f}")
         emit(f"Deribit index (spot):  ${ms.spot:,.2f}")
-        if ms.dvol_current > 0:
-            emit(f"Deribit DVOL:          {ms.dvol_current*100:.1f}%")
         if ms.sigma_adjusted > 0:
             emit(f"Regression σ_adj:      {ms.sigma_adjusted*100:.1f}%  <-- primary")
         if ms.sigma_garch > 0:
@@ -88,7 +74,9 @@ def render_once(
             emit(f"GARCH(1,1) vol:        {ms.sigma_garch*100:.1f}%{primary_tag}")
         emit(f"Implied ATM vol:       {ms.sigma_implied*100:.1f}%")
         emit(f"Realized 1h vol:       {ms.sigma_realized*100:.1f}%")
+        emit(f"Weighted IV/RV vol:    {ms.sigma_weighted*100:.1f}%")
         emit(f"Model vol (σ):         {ms.sigma_blend*100:.1f}%")
+        emit(f"Vol source:            {ms.vol_source}")
         emit(f"Confidence:            {ms.confidence}")
         emit(f"1σ move (time left):   ~{ms.one_sigma_move_pct:.2f}%")
         emit(f"Notes:                 {ms.note}")
@@ -170,6 +158,24 @@ def print_ladder_table(
             f"  {r.rec_note}"
         )
         print(_clip_line(line, max_width))
+
+
+def print_compact_summary_table(result: EvaluationResult, *, max_width: Optional[int] = None) -> None:
+    ms = result.market_state
+    rows = [
+        ("Event", str(result.event_ticker)),
+        ("Left", f"{ms.minutes_left:.1f}m"),
+        ("Spot", f"${ms.spot:,.2f}"),
+        ("IV", f"{ms.sigma_implied*100:.1f}%"),
+        ("RV", f"{ms.sigma_realized*100:.1f}%"),
+        ("75/25", f"{ms.sigma_weighted*100:.1f}%"),
+        ("Model", f"{ms.sigma_blend*100:.1f}%"),
+        ("Source", str(ms.vol_source)),
+        ("1σ", f"{ms.one_sigma_move_pct:.2f}%"),
+        ("Conf", str(ms.confidence)),
+    ]
+    table = " | ".join(f"{label}: {value}" for label, value in rows)
+    print(_clip_line(table, max_width))
 
 
 def print_explainer(*, max_width: Optional[int] = None) -> None:

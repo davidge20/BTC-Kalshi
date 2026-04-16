@@ -60,6 +60,7 @@ def main() -> None:
     # --- Load config ---
     from kalshi_edge.strategy_config import ENV_VAR as CONFIG_ENV_VAR, config_hash, config_source_path, config_to_dict, load_config
     from kalshi_edge.trade_log import resolve_trade_log_path
+    from kalshi_edge.live_iv_cache import default_live_iv_cache_path
 
     if args.config:
         os.environ[CONFIG_ENV_VAR] = args.config
@@ -153,6 +154,40 @@ def main() -> None:
         debug_order_manager()
         return
 
+    # --- Regression model state ---
+    vol_model = None
+    vol_model_refreshed_at = None
+
+    live_iv_cache_path = cfg.LIVE_IV_CACHE_PATH or default_live_iv_cache_path()
+
+    def load_vol_model():
+        nonlocal vol_model, vol_model_refreshed_at
+        now = datetime.now(timezone.utc)
+        if (
+            vol_model is not None
+            and vol_model_refreshed_at is not None
+            and (now - vol_model_refreshed_at).total_seconds() < 3600
+        ):
+            return vol_model
+        try:
+            from kalshi_edge.vol_regression import VolatilityRegression
+
+            model = VolatilityRegression().fit_from_live_cache(
+                HttpClient(debug=args.debug_http),
+                iv_cache_path=live_iv_cache_path,
+                lookback_hours=int(cfg.LIVE_REGRESSION_LOOKBACK_HOURS),
+                min_obs=int(cfg.LIVE_REGRESSION_MIN_OBS),
+            )
+            vol_model = model
+            vol_model_refreshed_at = now
+            print(f"[vol] regression model ready: {model.summary()}", flush=True)
+        except Exception as e:
+            if vol_model is None:
+                print(f"[vol] regression unavailable, falling back to fixed 75/25 IV-RV blend: {e}", flush=True)
+            else:
+                print(f"[vol] regression refresh failed, keeping previous model: {e}", flush=True)
+        return vol_model
+
     # --- Set up trader ---
     trader = None
     if args.trade:
@@ -210,7 +245,11 @@ def main() -> None:
             if cfg.LOCK_EVENT and locked_event is not None:
                 event = locked_event
             else:
-                discovered = discover_current_event(window_minutes=cfg.WINDOW_MINUTES, debug_http=args.debug_http)
+                discovered = discover_current_event(
+                    window_minutes=cfg.WINDOW_MINUTES,
+                    debug_http=args.debug_http,
+                    series_ticker=cfg.DISCOVERY_SERIES_TICKER,
+                )
                 event = discovered.event_ticker
                 if cfg.LOCK_EVENT:
                     locked_event = event
@@ -229,6 +268,8 @@ def main() -> None:
             threads=cfg.THREADS,
             iv_band_pct=cfg.IV_BAND_PCT,
             debug_http=args.debug_http,
+            vol_model=load_vol_model(),
+            live_iv_cache_path=live_iv_cache_path,
         )
         last_result = result
 

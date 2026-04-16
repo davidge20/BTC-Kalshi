@@ -16,10 +16,10 @@ Preferred two-section JSON:
   "strategy": {
     "MIN_EV": 0.05,
     "ORDER_SIZE": 1,
-    "MAX_COST_PER_EVENT": 5.0,
-    "MAX_POSITIONS_PER_EVENT": 10,
-    "MAX_COST_PER_MARKET": 1.0,
-    "MAX_CONTRACTS_PER_MARKET": 2,
+    "MAX_COST_PER_EVENT": null,
+    "MAX_POSITIONS_PER_EVENT": null,
+    "MAX_COST_PER_MARKET": null,
+    "MAX_CONTRACTS_PER_MARKET": null,
     "MIN_TOP_SIZE": 1.0,
     "SPREAD_MAX_CENTS": 30,
     "DEDUPE_MARKETS": false,
@@ -27,12 +27,19 @@ Preferred two-section JSON:
     "SCALE_IN_COOLDOWN_SECONDS": 120,
     "SCALE_IN_MIN_EV": 0.06,
     "MAX_ENTRIES_PER_TICK": 1,
+    "POSITION_SIZING_MODE": "fixed",
+    "STARTING_BANKROLL_DOLLARS": 100.0,
+    "KELLY_FRACTION": 1.0,
     "FEE_CENTS": 1,
     "ORDER_MODE": "taker_only",
     "POST_ONLY": true,
     "ORDER_REFRESH_SECONDS": 10,
     "CANCEL_STALE_SECONDS": 60,
     "P_REQUOTE_PP": 0.02,
+    "EXIT_TAKE_PROFIT_MID_CENTS": 90,
+    "EXIT_ON_SIGNAL_REVERSAL": true,
+    "EXIT_SIGNAL_MIN_EDGE_PP": 0.0,
+    "EXIT_MINUTES_LEFT": 5.0,
     "paper": {
       "simulate_maker_fills": false,
       "tick_seconds": 1,
@@ -51,8 +58,13 @@ Preferred two-section JSON:
     "END_DATE": null,
     "MAX_EVENTS": 50,
     "STEP_MINUTES": 1,
+    "STEP_SECONDS": null,
     "MAX_STRIKES": 120,
     "BAND_PCT": 25.0,
+    "REALIZED_VOL_WINDOW_MINUTES": 60,
+    "POSITION_SIZING_MODE": "fixed",
+    "STARTING_BANKROLL_DOLLARS": 100.0,
+    "KELLY_FRACTION": 1.0,
     "CACHE_DIR": "data/cache",
     "LOG_DIR": "backtests"
   }
@@ -166,24 +178,23 @@ class StrategyConfig:
     # --- core entry + caps ---
     MIN_EV: float = 0.05
     ORDER_SIZE: int = 1
-    MAX_COST_PER_EVENT: float = 5.0
-    MAX_POSITIONS_PER_EVENT: int = 5
-    MAX_COST_PER_MARKET: float = 2.0
-    MAX_CONTRACTS_PER_MARKET: int = 1
+    MAX_COST_PER_EVENT: Optional[float] = None
+    MAX_POSITIONS_PER_EVENT: Optional[int] = None
+    MAX_COST_PER_MARKET: Optional[float] = None
+    MAX_CONTRACTS_PER_MARKET: Optional[int] = None
 
     # --- liquidity / data quality gates ---
     MIN_TOP_SIZE: float = 1.0
     SPREAD_MAX_CENTS: int = 30
 
-    # --- scaling / dedupe semantics ---
-    DEDUPE_MARKETS: bool = True
-    ALLOW_SCALE_IN: bool = False
-    SCALE_IN_COOLDOWN_SECONDS: int = 60
-    SCALE_IN_MIN_EV: float = 0.06  # default MIN_EV + 0.01 (adjusted if MIN_EV overridden and SCALE_IN_MIN_EV absent)
-    MAX_ENTRIES_PER_TICK: int = 1
-
     # --- logging knobs ---
     LOG_TOP_N_CANDIDATES: int = 5
+    MAX_ENTRIES_PER_TICK: int = 1
+
+    # --- position sizing ---
+    POSITION_SIZING_MODE: str = "fixed"
+    STARTING_BANKROLL_DOLLARS: float = 100.0
+    KELLY_FRACTION: float = 1.0
 
     # --- evaluation / API budget knobs ---
     # Limits number of Kalshi orderbooks fetched per tick (closest-to-spot strikes).
@@ -198,16 +209,30 @@ class StrategyConfig:
     ORDER_REFRESH_SECONDS: int = 10
     CANCEL_STALE_SECONDS: int = 60
     P_REQUOTE_PP: float = 0.02
+    EXIT_TAKE_PROFIT_MID_CENTS: Optional[int] = 90
+    EXIT_ON_SIGNAL_REVERSAL: bool = True
+    EXIT_SIGNAL_MIN_EDGE_PP: float = 0.0
+    EXIT_MINUTES_LEFT: float = 5.0
+
+    # --- position management ---
+    DEDUPE_MARKETS: bool = False
+    ALLOW_SCALE_IN: bool = True
+    SCALE_IN_COOLDOWN_SECONDS: int = 120
+    SCALE_IN_MIN_EV: float = 0.06
 
     # --- evaluation / runtime ---
     REFRESH_SECONDS: int = 10
     WINDOW_MINUTES: int = 70
+    DISCOVERY_SERIES_TICKER: str = "KXBTCD"
     BAND_PCT: float = 25.0
     SORT_MODE: str = "ev"  # "ev"|"strike"|"sens"
     DEPTH_WINDOW_CENTS: int = 2
     THREADS: int = 10
     IV_BAND_PCT: float = 3.0
     MIN_MINUTES_LEFT: float = 2.0
+    LIVE_IV_CACHE_PATH: str = "data/live_iv/deribit_btc_atm_iv.jsonl"
+    LIVE_REGRESSION_LOOKBACK_HOURS: int = 168
+    LIVE_REGRESSION_MIN_OBS: int = 24
 
     # --- behavior flags ---
     LOCK_EVENT: bool = True
@@ -226,42 +251,55 @@ class StrategyConfig:
             raise ValueError("MIN_EV must be >= 0")
         if int(self.ORDER_SIZE) < 1:
             raise ValueError("ORDER_SIZE must be >= 1")
-        if int(self.MAX_ENTRIES_PER_TICK) < 1:
-            raise ValueError("MAX_ENTRIES_PER_TICK must be >= 1")
         if int(self.LOG_TOP_N_CANDIDATES) < 0:
             raise ValueError("LOG_TOP_N_CANDIDATES must be >= 0")
+        if int(self.MAX_ENTRIES_PER_TICK) < 1:
+            raise ValueError("MAX_ENTRIES_PER_TICK must be >= 1")
+        if self.POSITION_SIZING_MODE not in {"fixed", "kelly"}:
+            raise ValueError('POSITION_SIZING_MODE must be one of: "fixed", "kelly"')
+        if float(self.STARTING_BANKROLL_DOLLARS) <= 0:
+            raise ValueError("STARTING_BANKROLL_DOLLARS must be > 0")
+        if float(self.KELLY_FRACTION) <= 0 or float(self.KELLY_FRACTION) > 1:
+            raise ValueError("KELLY_FRACTION must be in (0, 1]")
         if int(self.MAX_STRIKES) < 1:
             raise ValueError("MAX_STRIKES must be >= 1")
-        if int(self.MAX_CONTRACTS_PER_MARKET) < 1:
-            raise ValueError("MAX_CONTRACTS_PER_MARKET must be >= 1")
-        if float(self.SCALE_IN_MIN_EV) < float(self.MIN_EV):
-            raise ValueError("SCALE_IN_MIN_EV must be >= MIN_EV")
+        if self.MAX_CONTRACTS_PER_MARKET is not None and int(self.MAX_CONTRACTS_PER_MARKET) < 1:
+            raise ValueError("MAX_CONTRACTS_PER_MARKET must be >= 1 when set")
+        if int(self.SCALE_IN_COOLDOWN_SECONDS) < 0:
+            raise ValueError("SCALE_IN_COOLDOWN_SECONDS must be >= 0")
 
-        if float(self.MAX_COST_PER_EVENT) < 0:
-            raise ValueError("MAX_COST_PER_EVENT must be >= 0")
-        if float(self.MAX_COST_PER_MARKET) < 0:
-            raise ValueError("MAX_COST_PER_MARKET must be >= 0")
-        if int(self.MAX_POSITIONS_PER_EVENT) < 0:
-            raise ValueError("MAX_POSITIONS_PER_EVENT must be >= 0")
+        if self.MAX_COST_PER_EVENT is not None and float(self.MAX_COST_PER_EVENT) < 0:
+            raise ValueError("MAX_COST_PER_EVENT must be >= 0 when set")
+        if self.MAX_COST_PER_MARKET is not None and float(self.MAX_COST_PER_MARKET) < 0:
+            raise ValueError("MAX_COST_PER_MARKET must be >= 0 when set")
+        if self.MAX_POSITIONS_PER_EVENT is not None and int(self.MAX_POSITIONS_PER_EVENT) < 0:
+            raise ValueError("MAX_POSITIONS_PER_EVENT must be >= 0 when set")
         if int(self.FEE_CENTS) < 0:
             raise ValueError("FEE_CENTS must be >= 0")
         if float(self.MIN_TOP_SIZE) < 0:
             raise ValueError("MIN_TOP_SIZE must be >= 0")
         if int(self.SPREAD_MAX_CENTS) < 0:
             raise ValueError("SPREAD_MAX_CENTS must be >= 0")
-
-        if bool(self.DEDUPE_MARKETS) and bool(self.ALLOW_SCALE_IN):
-            # Consistent semantics: DEDUPE_MARKETS means one entry per market, so scaling is disabled.
-            self.ALLOW_SCALE_IN = False
-            w.append("DEDUPE_MARKETS=true forces ALLOW_SCALE_IN=false (one entry per market)")
+        if float(self.SCALE_IN_MIN_EV) < 0:
+            raise ValueError("SCALE_IN_MIN_EV must be >= 0")
 
         if self.ORDER_MODE not in {"taker_only", "maker_only", "hybrid"}:
             raise ValueError('ORDER_MODE must be one of: "taker_only", "maker_only", "hybrid"')
+        if self.EXIT_TAKE_PROFIT_MID_CENTS is not None:
+            tp = int(self.EXIT_TAKE_PROFIT_MID_CENTS)
+            if tp < 0 or tp > 99:
+                raise ValueError("EXIT_TAKE_PROFIT_MID_CENTS must be in [0, 99] when set")
+        if float(self.EXIT_MINUTES_LEFT) < 0:
+            raise ValueError("EXIT_MINUTES_LEFT must be >= 0")
 
         if int(self.REFRESH_SECONDS) < 1:
             raise ValueError("REFRESH_SECONDS must be >= 1")
         if int(self.WINDOW_MINUTES) < 1:
             raise ValueError("WINDOW_MINUTES must be >= 1")
+        if not isinstance(self.DISCOVERY_SERIES_TICKER, str) or not self.DISCOVERY_SERIES_TICKER.strip():
+            raise ValueError("DISCOVERY_SERIES_TICKER must be a non-empty string")
+        if str(self.DISCOVERY_SERIES_TICKER).strip().upper() not in {"KXBTCD", "KXBTC15M"}:
+            raise ValueError('DISCOVERY_SERIES_TICKER must be one of: "KXBTCD", "KXBTC15M"')
         if float(self.BAND_PCT) <= 0:
             raise ValueError("BAND_PCT must be > 0")
         if self.SORT_MODE not in {"ev", "strike", "sens"}:
@@ -274,6 +312,12 @@ class StrategyConfig:
             raise ValueError("IV_BAND_PCT must be >= 0")
         if float(self.MIN_MINUTES_LEFT) < 0:
             raise ValueError("MIN_MINUTES_LEFT must be >= 0")
+        if not isinstance(self.LIVE_IV_CACHE_PATH, str) or not self.LIVE_IV_CACHE_PATH.strip():
+            raise ValueError("LIVE_IV_CACHE_PATH must be a non-empty string")
+        if int(self.LIVE_REGRESSION_LOOKBACK_HOURS) < 1:
+            raise ValueError("LIVE_REGRESSION_LOOKBACK_HOURS must be >= 1")
+        if int(self.LIVE_REGRESSION_MIN_OBS) < 10:
+            raise ValueError("LIVE_REGRESSION_MIN_OBS must be >= 10")
 
         if not isinstance(self.paper, PaperConfig):
             raise ValueError("paper must be an object")
@@ -292,8 +336,13 @@ class BacktestConfig:
     EVENTS: Optional[str] = None
     MAX_EVENTS: int = 50
     STEP_MINUTES: int = 1
+    STEP_SECONDS: Optional[int] = None
     MAX_STRIKES: int = 120
     BAND_PCT: float = 25.0
+    REALIZED_VOL_WINDOW_MINUTES: int = 60
+    POSITION_SIZING_MODE: str = "fixed"
+    STARTING_BANKROLL_DOLLARS: float = 100.0
+    KELLY_FRACTION: float = 1.0
     ONLY_LAST_N_MINUTES: Optional[int] = None
     CACHE_DIR: str = "data/cache"
     LOG_DIR: str = "backtests"
@@ -308,10 +357,20 @@ class BacktestConfig:
             raise ValueError("MAX_EVENTS must be >= 1")
         if int(self.STEP_MINUTES) < 1:
             raise ValueError("STEP_MINUTES must be >= 1")
+        if self.STEP_SECONDS is not None and int(self.STEP_SECONDS) < 1:
+            raise ValueError("STEP_SECONDS must be >= 1 when set")
         if int(self.MAX_STRIKES) < 1:
             raise ValueError("MAX_STRIKES must be >= 1")
         if float(self.BAND_PCT) <= 0:
             raise ValueError("BAND_PCT must be > 0")
+        if int(self.REALIZED_VOL_WINDOW_MINUTES) < 1:
+            raise ValueError("REALIZED_VOL_WINDOW_MINUTES must be >= 1")
+        if self.POSITION_SIZING_MODE not in {"fixed", "kelly"}:
+            raise ValueError('POSITION_SIZING_MODE must be one of: "fixed", "kelly"')
+        if float(self.STARTING_BANKROLL_DOLLARS) <= 0:
+            raise ValueError("STARTING_BANKROLL_DOLLARS must be > 0")
+        if float(self.KELLY_FRACTION) <= 0 or float(self.KELLY_FRACTION) > 1:
+            raise ValueError("KELLY_FRACTION must be in (0, 1]")
         if self.ONLY_LAST_N_MINUTES is not None and int(self.ONLY_LAST_N_MINUTES) < 1:
             raise ValueError("ONLY_LAST_N_MINUTES must be >= 1 when set")
         if not isinstance(self.CACHE_DIR, str) or not self.CACHE_DIR.strip():
@@ -437,10 +496,7 @@ def _apply_overrides(base: StrategyConfig, overrides: Dict[str, Any], *, present
         v = _coerce_value(k, t, raw)
         out = replace(out, **{k: v})
 
-    # Special defaulting: if MIN_EV is overridden but SCALE_IN_MIN_EV missing, derive it.
-    if "MIN_EV" in present_keys and "SCALE_IN_MIN_EV" not in present_keys:
-        out = replace(out, SCALE_IN_MIN_EV=float(out.MIN_EV) + 0.01)
-
+    # Special defaulting: removed SCALE_IN_MIN_EV logic
     return out
 
 
@@ -587,17 +643,12 @@ def _self_test() -> None:
     sample = {
         "MIN_EV": "0.05",
         "ORDER_SIZE": "2",
-        "DEDUPE_MARKETS": "false",
-        "ALLOW_SCALE_IN": "true",
-        "SCALE_IN_MIN_EV": "0.06",
         "P_REQUOTE_PP": "0.02",
     }
     cfg = _apply_overrides(replace(DEFAULT_CONFIG), sample, present_keys=set(sample.keys()))
     cfg.validate()
     assert isinstance(cfg.MIN_EV, float)
     assert isinstance(cfg.ORDER_SIZE, int) and cfg.ORDER_SIZE == 2
-    assert cfg.DEDUPE_MARKETS is False
-    assert cfg.ALLOW_SCALE_IN is True
 
 
 if __name__ == "__main__":

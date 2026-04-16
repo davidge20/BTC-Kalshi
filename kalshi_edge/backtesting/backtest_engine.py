@@ -2,8 +2,9 @@
 Minute-cadence backtest engine for Kalshi BTC ladder events.
 
 Volatility hierarchy (matches live trader):
-  1. GARCH(1,1) on trailing Coinbase 1-min returns  (primary)
-  2. Trailing 60-min realized vol                    (fallback)
+  1. Regression on weighted implied/RV proxy + RV   (primary)
+  2. GARCH(1,1) on trailing Coinbase 1-min returns
+  3. Trailing realized vol fallback
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import logging
 import math
 import os
 import statistics
+import numpy as np
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,7 +31,9 @@ from kalshi_edge.backtesting.kalshi_candles import (
 )
 from kalshi_edge.constants import MINUTES_PER_YEAR
 from kalshi_edge.data.kalshi.models import market_strike_from_floor
-from kalshi_edge.math_models import clamp01, lognormal_prob_above
+from kalshi_edge.exit_rules import ExitMarketSnapshot, evaluate_exit, should_pause_new_entries
+from kalshi_edge.math_models import clamp01
+from kalshi_edge.monte_carlo import simulate_t_dist_terminal_prices, convert_annualized_vol_to_hourly
 from kalshi_edge.strategy_config import BacktestConfig, StrategyConfig, config_to_dict
 from kalshi_edge.util.time import parse_iso8601
 
@@ -80,8 +84,10 @@ def annualized_realized_vol_from_closes(closes: List[float]) -> float:
         if a <= 0 or b <= 0:
             continue
         rets.append(math.log(b / a))
-    if len(rets) < 2:
+    if len(rets) < 1:
         return 0.0
+    if len(rets) == 1:
+        return float(abs(rets[0]) * math.sqrt(MINUTES_PER_YEAR))
     stdev = statistics.pstdev(rets)
     return float(stdev * math.sqrt(MINUTES_PER_YEAR))
 
@@ -104,6 +110,49 @@ def edge_at_price(*, p_win: float, price_cents: int, fee_cents: int) -> float:
     return float(p_win) - (float(price_cents + fee_cents) / 100.0)
 
 
+def kelly_fraction_binary(*, p_win: float, total_cost_dollars: float) -> float:
+    cost = float(total_cost_dollars)
+    if cost <= 0.0 or cost >= 1.0:
+        return 0.0
+    p = clamp01(float(p_win))
+    return max(0.0, float((p - cost) / (1.0 - cost)))
+
+
+def desired_total_contracts(
+    *,
+    sizing_mode: str,
+    order_size: int,
+    max_contracts_per_market: int,
+    price_cents: int,
+    fee_cents: int,
+    p_win: float,
+    bankroll_dollars: float,
+    kelly_fraction_scale: float,
+    current_contracts: int,
+) -> int:
+    if str(sizing_mode) != "kelly":
+        return min(int(max_contracts_per_market), int(current_contracts) + int(order_size))
+
+    total_cost_dollars = float(price_cents + fee_cents) / 100.0
+    if total_cost_dollars <= 0.0 or bankroll_dollars <= 0.0:
+        return int(current_contracts)
+    kelly_f = float(kelly_fraction_binary(p_win=float(p_win), total_cost_dollars=total_cost_dollars))
+    target_dollars = float(bankroll_dollars) * float(kelly_fraction_scale) * float(kelly_f)
+    target_contracts = int(math.floor(target_dollars / total_cost_dollars))
+    return min(int(max_contracts_per_market), max(0, int(target_contracts)))
+
+
+def _candle_at_or_before(
+    cmap: Dict[int, Candle],
+    keys: List[int],
+    ts: int,
+) -> Optional[Candle]:
+    idx = bisect.bisect_right(keys, int(ts)) - 1
+    if idx < 0:
+        return None
+    return cmap.get(keys[idx])
+
+
 @dataclass
 class Candle:
     ts: int
@@ -118,6 +167,7 @@ class MarketMeta:
     strike: float
     subtitle: str
     close_ts: int
+    open_ts: int
     result: Optional[str] = None
     settlement_value: Optional[int] = None
 
@@ -149,6 +199,19 @@ class Position:
     total_fee_dollars: float = 0.0
     fills: List[Fill] = field(default_factory=list)
     last_fill_ts: Optional[int] = None
+
+
+@dataclass
+class ClosedTrade:
+    event_ticker: str
+    market_ticker: str
+    side: str
+    contracts: int
+    exit_ts: int
+    exit_reason: str
+    entry_cost_dollars: float
+    exit_net_dollars: float
+    pnl_dollars: float
 
 
 @dataclass
@@ -235,6 +298,13 @@ def _market_meta_from_row(row: Dict[str, Any], *, event_ticker: str) -> Optional
         close_ts = int(parse_iso8601(close_s).timestamp())
     except Exception:
         return None
+        
+    open_s = row.get("open_time") or row.get("openTime")
+    try:
+        open_ts = int(parse_iso8601(open_s).timestamp()) if isinstance(open_s, str) else int(close_ts)
+    except Exception:
+        open_ts = int(close_ts)
+
     subtitle = str(row.get("subtitle") or row.get("title") or "")
     result = row.get("result")
     settlement_value = row.get("settlement_value")
@@ -245,6 +315,7 @@ def _market_meta_from_row(row: Dict[str, Any], *, event_ticker: str) -> Optional
         strike=float(strike),
         subtitle=subtitle,
         close_ts=int(close_ts),
+        open_ts=int(open_ts),
         result=str(result).lower() if isinstance(result, str) else None,
         settlement_value=settlement_value_i,
     )
@@ -300,6 +371,53 @@ def _append_jsonl(path: str, record: Dict[str, Any]) -> None:
         f.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def _position_avg_principal_cents(pos: Position) -> int:
+    if int(pos.total_count) <= 0:
+        return 0
+    principal = max(0.0, float(pos.total_cost_dollars) - float(pos.total_fee_dollars))
+    return int(round((principal * 100.0) / float(pos.total_count)))
+
+
+def _close_position(
+    *,
+    positions: Dict[str, Position],
+    market_cost: Dict[str, float],
+    event_cost: Dict[str, float],
+    event_positions: Dict[str, int],
+    pos: Position,
+    exit_ts: int,
+    exit_reason: str,
+    exit_price_cents: int,
+    exit_fee_cents: int,
+) -> ClosedTrade:
+    contracts = int(pos.total_count)
+    entry_cost = float(pos.total_cost_dollars)
+    exit_net = float(contracts) * ((float(exit_price_cents) - float(exit_fee_cents)) / 100.0)
+    pnl = float(exit_net - entry_cost)
+
+    positions.pop(pos.market_ticker, None)
+    market_cost.pop(pos.market_ticker, None)
+    evt = str(pos.event_ticker)
+    event_cost[evt] = float(max(0.0, event_cost.get(evt, 0.0) - entry_cost))
+    if float(event_cost.get(evt, 0.0)) <= 0.0:
+        event_cost.pop(evt, None)
+    event_positions[evt] = int(max(0, int(event_positions.get(evt, 0)) - 1))
+    if int(event_positions.get(evt, 0)) <= 0:
+        event_positions.pop(evt, None)
+
+    return ClosedTrade(
+        event_ticker=str(pos.event_ticker),
+        market_ticker=str(pos.market_ticker),
+        side=str(pos.side),
+        contracts=int(contracts),
+        exit_ts=int(exit_ts),
+        exit_reason=str(exit_reason),
+        entry_cost_dollars=float(entry_cost),
+        exit_net_dollars=float(exit_net),
+        pnl_dollars=float(pnl),
+    )
+
+
 def run_backtest(
     *,
     http: Any,
@@ -328,7 +446,10 @@ def run_backtest(
             status="settled",
         )
     if int(bt.MAX_EVENTS) > 0:
-        events_raw = events_raw[: int(bt.MAX_EVENTS)]
+        if events_cfg:
+            events_raw = events_raw[: int(bt.MAX_EVENTS)]
+        else:
+            events_raw = events_raw[-int(bt.MAX_EVENTS) :]
 
     # Extend Coinbase fetch backwards to cover regression + GARCH warm-up.
     _REGRESSION_LOOKBACK_HOURS = 168
@@ -342,6 +463,7 @@ def run_backtest(
     close_by_ts = build_close_by_minute_ts(coin_rows)
     close_keys = sorted(close_by_ts.keys())
     close_vals = [float(close_by_ts[k]) for k in close_keys]
+    rv_window_closes = max(2, int(bt.REALIZED_VOL_WINDOW_MINUTES) + 1)
 
     # -- Log returns for GARCH (built once, reused across all events) --------
     ret_keys: List[int] = []
@@ -355,7 +477,12 @@ def run_backtest(
     # -- Lazy heavy imports (keep test collection fast) ----------------------
     import pandas as pd
     from kalshi_edge.garch import forecast_garch_volatility
-    from kalshi_edge.vol_regression import VolatilityRegression, fetch_deribit_dvol_hourly
+    from kalshi_edge.vol_regression import (
+        FEATURE_COL,
+        VolatilityRegression,
+        fetch_deribit_dvol_hourly,
+        implied_vol_proxy,
+    )
 
     # -- Historical DVOL (fetch once, cache on disk) -------------------------
     dvol_warm_up_s = (_REGRESSION_LOOKBACK_HOURS + 2) * 3600
@@ -391,7 +518,7 @@ def run_backtest(
             idx = bisect.bisect_right(close_keys, hour_ts) - 1
             if idx < 1:
                 continue
-            lo = max(0, idx - 60)
+            lo = max(0, idx - (rv_window_closes - 1))
             chunk = close_vals[lo: idx + 1]
             if len(chunk) >= 2:
                 rv_by_hour[hour_ts] = annualized_realized_vol_from_closes(chunk)
@@ -409,11 +536,12 @@ def run_backtest(
             return None
         return float(close_vals[idx])
 
-    def realized_vol_at(ts: int, window: int = 61) -> Optional[float]:
+    def realized_vol_at(ts: int, window_closes: Optional[int] = None) -> Optional[float]:
         idx = bisect.bisect_right(close_keys, int(ts)) - 1
         if idx < 0:
             return None
-        lo = max(0, idx - int(window) + 1)
+        w = int(window_closes) if window_closes is not None else int(rv_window_closes)
+        lo = max(0, idx - max(2, w) + 1)
         closes = close_vals[lo : idx + 1]
         if len(closes) < 2:
             return None
@@ -447,7 +575,7 @@ def run_backtest(
 
     def regression_sigma_at(ts: int) -> Optional[float]:
         """
-        Fit DVOL/RV encompassing regression on trailing hourly data and predict.
+        Fit the live-style regression on trailing hourly data and predict.
         Cached per hour. Uses only data strictly before the current hour (no lookahead).
         """
         bucket = (int(ts) // _CACHE_INTERVAL) * _CACHE_INTERVAL
@@ -455,37 +583,38 @@ def run_backtest(
             cached = _regression_cache[bucket]
             return cached if cached is not None and cached > 0 else None
 
-        dvol_now = dvol_by_hour.get(bucket)
+        implied_now = dvol_by_hour.get(bucket)
         rv_now = rv_by_hour.get(bucket)
-        if dvol_now is None or dvol_now <= 0 or rv_now is None or rv_now <= 0:
+        if implied_now is None or implied_now <= 0 or rv_now is None or rv_now <= 0:
             _regression_cache[bucket] = None
             return None
+        feature_now = implied_vol_proxy(implied_now, rv_now)
 
         # Build training rows from trailing hours (target = NEXT hour's RV)
-        train_dvol, train_rv, train_target = [], [], []
+        train_feature, train_rv, train_target = [], [], []
         for h in range(1, _REGRESSION_LOOKBACK_HOURS + 1):
             h_ts = bucket - h * 3600
-            h_dvol = dvol_by_hour.get(h_ts)
+            h_implied = dvol_by_hour.get(h_ts)
             h_rv = rv_by_hour.get(h_ts)
             h_target = rv_by_hour.get(h_ts + 3600)
-            if h_dvol is not None and h_rv is not None and h_target is not None:
-                train_dvol.append(h_dvol)
+            if h_implied is not None and h_rv is not None and h_target is not None:
+                train_feature.append(implied_vol_proxy(h_implied, h_rv))
                 train_rv.append(h_rv)
                 train_target.append(h_target)
 
-        if len(train_dvol) < 24:
+        if len(train_feature) < 24:
             _regression_cache[bucket] = None
             return None
 
         try:
             df = pd.DataFrame({
-                "DVOL_Current": train_dvol,
+                FEATURE_COL: train_feature,
                 "RV_Trailing": train_rv,
                 "Target_RV_Forward": train_target,
             })
             model = VolatilityRegression()
             model.fit(df)
-            sigma_adj = model.predict(dvol_now, rv_now)
+            sigma_adj = model.predict(feature_now, rv_now)
             _regression_cache[bucket] = float(sigma_adj)
             return float(sigma_adj)
         except Exception as e:
@@ -495,19 +624,39 @@ def run_backtest(
 
     _use_regression = True
 
+    _last_vol_source = None
+
     def volatility_at(ts: int) -> Tuple[Optional[float], str]:
-        """Full live hierarchy: Regression > GARCH > RV fallback."""
+        nonlocal _last_vol_source
+        """Full live hierarchy: regression > GARCH > weighted implied/RV fallback."""
+        val, source = None, "none"
+        
         if _use_regression:
             reg = regression_sigma_at(ts)
             if reg is not None and reg > 0:
-                return reg, "regression"
-        g = garch_sigma_at(ts)
-        if g is not None and g > 0:
-            return g, "garch"
-        rv = realized_vol_at(ts)
-        if rv is not None and rv > 0:
-            return rv, "rv_fallback"
-        return None, "none"
+                val, source = reg, "regression"
+                
+        if val is None:
+            g = garch_sigma_at(ts)
+            if g is not None and g > 0:
+                val, source = g, "garch"
+            else:
+                implied_now = dvol_by_hour.get((int(ts) // _CACHE_INTERVAL) * _CACHE_INTERVAL)
+                rv = realized_vol_at(ts)
+                if implied_now is not None and implied_now > 0 and rv is not None and rv > 0:
+                    val, source = implied_vol_proxy(implied_now, rv), "weighted_proxy"
+                elif rv is not None and rv > 0:
+                    val, source = rv, "rv_fallback"
+
+        if source != _last_vol_source:
+            dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+            if source != "regression" and source != "none":
+                print(f"[backtest] ⚠️  WARNING: Volatility model fell back to {source} at {dt_str}")
+            elif source == "regression" and _last_vol_source is not None:
+                print(f"[backtest] ✅ Volatility model recovered to regression at {dt_str}")
+            _last_vol_source = source
+
+        return val, source
 
     # -- Tracking -----------------------------------------------------------
     positions: Dict[str, Position] = {}
@@ -515,12 +664,14 @@ def run_backtest(
     event_cost: Dict[str, float] = {}
     event_positions: Dict[str, int] = {}
     all_fills: List[Fill] = []
+    closed_trades: List[ClosedTrade] = []
     per_event_results: List[EventResult] = []
     total_wins = 0
     total_settled = 0
     events_scanned = 0
     events_simulated = 0
     vol_source_counts: Dict[str, int] = {}
+    realized_pnl_total = 0.0
 
     for ev in events_raw:
         et = _event_ticker(ev)
@@ -550,16 +701,18 @@ def run_backtest(
             continue
 
         # Pre-filter: only fetch candles for strikes near spot at event
-        # start.  Use 2× MAX_STRIKES so drifting spot still finds data.
+        # start.  Use MAX_STRIKES directly (don't multiply by 2) since 
+        # strikes are $100 apart and massive drifts are rare.
         prefilt_spot = spot_at_or_before(event_start_ts)
         if prefilt_spot is not None:
-            prefilt_n = int(bt.MAX_STRIKES) * 2
+            prefilt_n = int(bt.MAX_STRIKES)
             metas = _pick_markets(metas, spot=prefilt_spot, max_strikes=prefilt_n, band_pct=float(bt.BAND_PCT))
         if not metas:
             continue
         print(f"[backtest] event {et}: {len(metas)} strikes in pre-filter", flush=True)
 
         candles_by_market: Dict[str, Dict[int, Candle]] = {}
+        candle_keys_by_market: Dict[str, List[int]] = {}
         live_tickers = [m.ticker for m in metas if m.close_ts >= cutoff_ts]
         batched = fetch_batch_market_candles_1m(http, live_tickers, event_start_ts, close_ts)
 
@@ -596,13 +749,15 @@ def run_backtest(
                 )
             if cmap:
                 candles_by_market[m.ticker] = cmap
+                candle_keys_by_market[m.ticker] = sorted(cmap.keys())
 
         if not candles_by_market:
             continue
         events_simulated += 1
 
-        event_fill_start_idx = len(all_fills)
-        step_s = int(bt.STEP_MINUTES) * 60
+        event_close_start_idx = len(closed_trades)
+        meta_by_ticker = {m.ticker: m for m in metas}
+        step_s = int(bt.STEP_SECONDS) if bt.STEP_SECONDS is not None else int(bt.STEP_MINUTES) * 60
         t = int(math.ceil(event_start_ts / step_s) * step_s)
         while t < close_ts:
             minutes_left = max(0.0, float(close_ts - t) / 60.0)
@@ -621,8 +776,107 @@ def run_backtest(
 
             chosen = _pick_markets(metas, spot=spot, max_strikes=int(bt.MAX_STRIKES), band_pct=float(bt.BAND_PCT))
             cands: List[_Candidate] = []
+            
+            # OPTIMIZATION: Generate terminal prices once per minute tick, reuse across all strikes
+            hourly_vol = convert_annualized_vol_to_hourly(float(sigma))
+            time_remaining_hours = float(minutes_left) / 60.0
+            
+            terminal_prices = simulate_t_dist_terminal_prices(
+                current_price=float(spot),
+                hourly_vol=hourly_vol,
+                time_remaining_hours=time_remaining_hours,
+                df=3.0,
+                n_paths=10_000,
+            )
+
+            exited_markets: set[str] = set()
+            for market_ticker, pos in list(positions.items()):
+                if pos.event_ticker != et or int(pos.total_count) <= 0:
+                    continue
+                meta = meta_by_ticker.get(market_ticker)
+                if meta is None or t < int(meta.open_ts):
+                    continue
+                c = _candle_at_or_before(
+                    candles_by_market.get(market_ticker, {}),
+                    candle_keys_by_market.get(market_ticker, []),
+                    t,
+                )
+                if c is None:
+                    continue
+                ybid, yask = c.yes_bid_cents, c.yes_ask_cents
+                if ybid is None and yask is None:
+                    continue
+                p_yes = clamp01(float(np.mean(terminal_prices > float(meta.strike))))
+                nbid, nask = derive_no_quotes(ybid, yask)
+                decision = evaluate_exit(
+                    snapshot=ExitMarketSnapshot(
+                        side=str(pos.side),
+                        p_yes=float(p_yes),
+                        minutes_left=float(minutes_left),
+                        yes_bid_cents=ybid,
+                        yes_ask_cents=yask,
+                        no_bid_cents=nbid,
+                        no_ask_cents=nask,
+                    ),
+                    total_count=int(pos.total_count),
+                    total_cost_dollars=float(pos.total_cost_dollars),
+                    take_profit_mid_cents=(
+                        int(cfg.EXIT_TAKE_PROFIT_MID_CENTS) if cfg.EXIT_TAKE_PROFIT_MID_CENTS is not None else None
+                    ),
+                    exit_minutes_left=float(cfg.EXIT_MINUTES_LEFT),
+                    signal_exit_enabled=bool(cfg.EXIT_ON_SIGNAL_REVERSAL),
+                    signal_exit_min_edge_pp=float(cfg.EXIT_SIGNAL_MIN_EDGE_PP),
+                )
+                if decision is None:
+                    continue
+                exited_markets.add(str(market_ticker))
+                if decision.bid_cents is None or int(decision.bid_cents) <= 0:
+                    continue
+                closed = _close_position(
+                    positions=positions,
+                    market_cost=market_cost,
+                    event_cost=event_cost,
+                    event_positions=event_positions,
+                    pos=pos,
+                    exit_ts=int(t),
+                    exit_reason=str(decision.reason),
+                    exit_price_cents=int(decision.bid_cents),
+                    exit_fee_cents=int(cfg.FEE_CENTS),
+                )
+                closed_trades.append(closed)
+                realized_pnl_total = float(realized_pnl_total + float(closed.pnl_dollars))
+                _append_jsonl(
+                    log_path,
+                    {
+                        "record_type": "exit",
+                        "ts": _iso_utc(int(t)),
+                        "event": closed.event_ticker,
+                        "market_ticker": closed.market_ticker,
+                        "side": closed.side,
+                        "contracts": int(closed.contracts),
+                        "reason": closed.exit_reason,
+                        "exit_price_cents": int(decision.bid_cents),
+                        "exit_fee_cents": int(cfg.FEE_CENTS),
+                        "mid_cents": float(decision.mid_cents) if decision.mid_cents is not None else None,
+                        "p_win_now": float(decision.p_win_now),
+                        "avg_entry_cost_cents": float(decision.avg_entry_cost_cents),
+                        "edge_now_pp": float(decision.edge_now_pp),
+                        "pnl": float(closed.pnl_dollars),
+                    },
+                )
+
+            if should_pause_new_entries(minutes_left=float(minutes_left), exit_minutes_left=float(cfg.EXIT_MINUTES_LEFT)):
+                t += step_s
+                continue
+
             for m in chosen:
-                c = candles_by_market.get(m.ticker, {}).get(t)
+                if t < m.open_ts:
+                    continue
+                c = _candle_at_or_before(
+                    candles_by_market.get(m.ticker, {}),
+                    candle_keys_by_market.get(m.ticker, []),
+                    t,
+                )
                 if c is None:
                     continue
                 ybid, yask = c.yes_bid_cents, c.yes_ask_cents
@@ -634,7 +888,10 @@ def run_backtest(
                 if spread is not None and int(cfg.SPREAD_MAX_CENTS) >= 0 and int(spread) > int(cfg.SPREAD_MAX_CENTS):
                     continue
 
-                p_yes = clamp01(lognormal_prob_above(float(spot), float(m.strike), float(sigma), float(minutes_left)))
+                # Calculate probability from the pre-generated terminal prices
+                p_yes_raw = float(np.mean(terminal_prices > float(m.strike)))
+                p_yes = clamp01(p_yes_raw)
+
                 nbid, nask = derive_no_quotes(ybid, yask)
 
                 best: Optional[_Candidate] = None
@@ -685,35 +942,43 @@ def run_backtest(
                     cands.append(best)
 
             cands.sort(key=lambda x: float(x.edge_pp), reverse=True)
-            entries_this_tick = 0
             for cand in cands:
-                if entries_this_tick >= int(cfg.MAX_ENTRIES_PER_TICK):
-                    break
+                if cand.market_ticker in exited_markets:
+                    continue
                 pos = positions.get(cand.market_ticker)
                 current = int(pos.total_count) if pos else 0
                 existing_side = pos.side if pos else None
                 if existing_side is not None and existing_side != cand.side:
                     continue
-                if current > 0 and bool(cfg.DEDUPE_MARKETS):
+                
+                if float(cand.edge_pp) < float(cfg.MIN_EV):
                     continue
-                if current <= 0:
-                    if float(cand.edge_pp) < float(cfg.MIN_EV):
-                        continue
-                else:
-                    if not bool(cfg.ALLOW_SCALE_IN):
-                        continue
-                    if float(cand.edge_pp) < float(cfg.SCALE_IN_MIN_EV):
-                        continue
-                    if pos is not None and pos.last_fill_ts is not None:
-                        if (cand.ts - int(pos.last_fill_ts)) < int(cfg.SCALE_IN_COOLDOWN_SECONDS):
-                            continue
 
-                target = min(int(cfg.MAX_CONTRACTS_PER_MARKET), current + int(cfg.ORDER_SIZE))
+                bankroll_dollars = max(0.0, float(bt.STARTING_BANKROLL_DOLLARS) + float(realized_pnl_total))
+                total_open_cost = float(sum(float(v) for v in market_cost.values()))
+                target = desired_total_contracts(
+                    sizing_mode=str(bt.POSITION_SIZING_MODE),
+                    order_size=int(cfg.ORDER_SIZE),
+                    max_contracts_per_market=int(cfg.MAX_CONTRACTS_PER_MARKET),
+                    price_cents=int(cand.price_cents),
+                    fee_cents=int(cand.fee_cents),
+                    p_win=float(cand.p_yes if cand.side == "yes" else (1.0 - cand.p_yes)),
+                    bankroll_dollars=float(bankroll_dollars),
+                    kelly_fraction_scale=float(bt.KELLY_FRACTION),
+                    current_contracts=int(current),
+                )
                 add_count = int(target - current)
                 if add_count <= 0:
                     continue
 
-                add_cost = float(add_count) * (float(cand.price_cents + cand.fee_cents) / 100.0)
+                cost_per_contract = float(cand.price_cents + cand.fee_cents) / 100.0
+                available_cash = max(0.0, float(bankroll_dollars) - float(total_open_cost))
+                if cost_per_contract > 0:
+                    add_count = min(int(add_count), int(math.floor(available_cash / cost_per_contract)))
+                if add_count <= 0:
+                    continue
+
+                add_cost = float(add_count) * float(cost_per_contract)
                 is_new_market = current <= 0
                 if is_new_market and int(event_positions.get(et, 0)) >= int(cfg.MAX_POSITIONS_PER_EVENT):
                     continue
@@ -755,7 +1020,6 @@ def run_backtest(
                 event_cost[et] = float(event_cost.get(et, 0.0) + add_cost)
                 if is_new_market:
                     event_positions[et] = int(event_positions.get(et, 0) + 1)
-                entries_this_tick += 1
 
                 _append_jsonl(
                     log_path,
@@ -774,40 +1038,83 @@ def run_backtest(
                         "spread": int(fill.spread) if fill.spread is not None else None,
                         "sigma": float(fill.sigma),
                         "vol_source": fill.vol_source,
+                        "position_sizing_mode": str(bt.POSITION_SIZING_MODE),
+                        "bankroll_dollars": float(bankroll_dollars),
+                        "kelly_fraction": (
+                            float(
+                                kelly_fraction_binary(
+                                    p_win=float(fill.p_win),
+                                    total_cost_dollars=float(fill.entry_price_cents + fill.fee_cents) / 100.0,
+                                )
+                            )
+                            if str(bt.POSITION_SIZING_MODE) == "kelly"
+                            else None
+                        ),
                     },
                 )
             t += step_s
 
-        event_fills = [f for f in all_fills[event_fill_start_idx:] if f.event_ticker == et]
+        for market_ticker, pos in list(positions.items()):
+            if pos.event_ticker != et or int(pos.total_count) <= 0:
+                continue
+            m = meta_by_ticker.get(market_ticker)
+            result = m.result if m is not None else None
+            settlement_value = m.settlement_value if m is not None else None
+            if str(result or "").lower() == "void":
+                payout_per = _position_avg_principal_cents(pos)
+            else:
+                payout_per = _payout_cents_per_contract(
+                    result=result,
+                    side=pos.side,
+                    settlement_value=settlement_value,
+                    entry_price_cents=_position_avg_principal_cents(pos),
+                )
+            if payout_per is None:
+                continue
+            closed = _close_position(
+                positions=positions,
+                market_cost=market_cost,
+                event_cost=event_cost,
+                event_positions=event_positions,
+                pos=pos,
+                exit_ts=int(close_ts),
+                exit_reason="settlement",
+                exit_price_cents=int(payout_per),
+                exit_fee_cents=0,
+            )
+            closed_trades.append(closed)
+            realized_pnl_total = float(realized_pnl_total + float(closed.pnl_dollars))
+            _append_jsonl(
+                log_path,
+                {
+                    "record_type": "exit",
+                    "ts": _iso_utc(int(close_ts)),
+                    "event": closed.event_ticker,
+                    "market_ticker": closed.market_ticker,
+                    "side": closed.side,
+                    "contracts": int(closed.contracts),
+                    "reason": "settlement",
+                    "exit_price_cents": int(payout_per),
+                    "exit_fee_cents": 0,
+                    "pnl": float(closed.pnl_dollars),
+                },
+            )
+
+        event_closed = [c for c in closed_trades[event_close_start_idx:] if c.event_ticker == et]
         pnl = 0.0
         wins = 0
         settled = 0
-        meta_by_ticker = {m.ticker: m for m in metas}
-        for f in event_fills:
-            m = meta_by_ticker.get(f.market_ticker)
-            result = m.result if m is not None else None
-            settlement_value = m.settlement_value if m is not None else None
-            payout_per = _payout_cents_per_contract(
-                result=result,
-                side=f.side,
-                settlement_value=settlement_value,
-                entry_price_cents=f.entry_price_cents,
-            )
-            if payout_per is None:
-                continue
+        for closed in event_closed:
             settled += 1
-            payout_total = int(payout_per) * int(f.contracts)
-            cost_total = int(f.entry_price_cents + f.fee_cents) * int(f.contracts)
-            fill_pnl = float(payout_total - cost_total) / 100.0
-            pnl += fill_pnl
-            if fill_pnl > 0:
+            pnl += float(closed.pnl_dollars)
+            if float(closed.pnl_dollars) > 0:
                 wins += 1
 
         total_wins += wins
         total_settled += settled
 
-        trades = len(event_fills)
-        contracts = sum(int(f.contracts) for f in event_fills)
+        trades = len(event_closed)
+        contracts = sum(int(c.contracts) for c in event_closed)
         event_win_rate = (float(wins) / float(settled)) if settled > 0 else 0.0
         er = EventResult(
             event_ticker=et,
@@ -838,7 +1145,7 @@ def run_backtest(
 
     total_vol_ticks = sum(vol_source_counts.values()) if vol_source_counts else 0
     vol_summary_parts = []
-    for src in ("regression", "garch", "rv_fallback"):
+    for src in ("regression", "garch", "weighted_proxy", "rv_fallback"):
         cnt = vol_source_counts.get(src, 0)
         if cnt > 0:
             pct = 100.0 * cnt / total_vol_ticks
@@ -885,10 +1192,20 @@ def run_backtest(
                 "strategy": config_to_dict(cfg),
                 "backtest": dict(bt.__dict__),
                 "notes": {
-                    "fill_model": "taker-only: immediate fill at ask when quote present",
-                    "vol_model": "regression (DVOL+RV) > GARCH(1,1) > trailing RV (matches live hierarchy)",
+                    "fill_model": "taker-only: entries at ask, exits at bid or settlement",
+                    "vol_model": "regression (weighted implied proxy + RV) > GARCH(1,1) > weighted implied proxy > trailing RV",
                     "regression_lookback": f"{_REGRESSION_LOOKBACK_HOURS}h, min 24 obs, no lookahead",
+                    "rv_window_minutes": int(bt.REALIZED_VOL_WINDOW_MINUTES),
+                    "position_sizing_mode": str(bt.POSITION_SIZING_MODE),
+                    "starting_bankroll_dollars": float(bt.STARTING_BANKROLL_DOLLARS),
+                    "kelly_fraction": float(bt.KELLY_FRACTION),
+                    "step_seconds": int(bt.STEP_SECONDS) if bt.STEP_SECONDS is not None else int(bt.STEP_MINUTES) * 60,
                     "depth_gate": "MIN_TOP_SIZE ignored (no orderbook size in candles)",
+                    "subminute_note": (
+                        "sub-minute cadence reuses the latest available 1m candle until a fresh candle arrives"
+                        if ((int(bt.STEP_SECONDS) if bt.STEP_SECONDS is not None else int(bt.STEP_MINUTES) * 60) < 60)
+                        else None
+                    ),
                 },
             },
         },

@@ -23,6 +23,7 @@ from kalshi_edge.http_client import HttpClient
 from kalshi_edge.data.kalshi.client import get_orderbook
 from kalshi_edge.data.kalshi.models import market_strike_from_floor
 from kalshi_edge.math_models import clamp01, lognormal_prob_above
+from kalshi_edge.monte_carlo import convert_annualized_vol_to_hourly, simulate_t_dist_terminal_prices
 
 
 @dataclass
@@ -76,10 +77,22 @@ def _best_bid(levels: list) -> Optional[Tuple[int, float]]:
 def parse_orderbook_stats(ob_json: dict, depth_window_cents: int = 2) -> OrderbookStats:
     """
     Convert Kalshi orderbook JSON into OrderbookStats.
+    Handles both legacy integer-cent format (`orderbook`) and new fractional format (`orderbook_fp`).
     """
     ob = ob_json.get("orderbook", {}) or {}
+    ob_fp = ob_json.get("orderbook_fp", {}) or {}
+
+    # Try fractional format first, fallback to legacy
+    yes_fp = ob_fp.get("yes_dollars") or []
+    no_fp = ob_fp.get("no_dollars") or []
+    
     yes = ob.get("yes") or []
     no = ob.get("no") or []
+
+    # If fractional format exists, convert it to integer cents format for compatibility
+    if yes_fp or no_fp:
+        yes = [[int(round(float(p) * 100)), float(q)] for p, q in yes_fp]
+        no = [[int(round(float(p) * 100)), float(q)] for p, q in no_fp]
 
     y = _best_bid(yes)
     n = _best_bid(no)
@@ -184,17 +197,23 @@ def evaluate_ladder(
     """
     Main ladder evaluation routine.
 
-    When ``mc_paths > 0``, also runs a GBM Monte Carlo simulation and stores
-    ``p_mc`` on each row for cross-validation against the analytical model.
+    When ``mc_paths > 0``, also runs the Student-t Monte Carlo simulation used
+    by the backtest and stores ``p_mc`` on each row for cross-validation
+    against the analytical model.
     """
     chosen = pick_markets_near_spot(markets, spot, max_strikes=max_strikes, band_pct=band_pct)
 
     # Pre-compute MC terminal prices once (shared across all strikes).
     terminal_prices = None
     if mc_paths > 0:
-        from kalshi_edge.monte_carlo import monte_carlo_terminal_prices, mc_prob_above
-        terminal_prices = monte_carlo_terminal_prices(
-            spot, sigma_blend, minutes_left, n_paths=mc_paths, n_steps=mc_steps,
+        hourly_vol = convert_annualized_vol_to_hourly(float(sigma_blend))
+        time_remaining_hours = float(minutes_left) / 60.0
+        terminal_prices = simulate_t_dist_terminal_prices(
+            current_price=float(spot),
+            hourly_vol=hourly_vol,
+            time_remaining_hours=time_remaining_hours,
+            df=3.0,
+            n_paths=int(mc_paths),
         )
 
     def fetch_one(tkr: str) -> Tuple[str, dict]:
@@ -223,7 +242,7 @@ def evaluate_ladder(
 
         p_mc = None
         if terminal_prices is not None:
-            p_mc = float(mc_prob_above(terminal_prices, strike))
+            p_mc = float((terminal_prices > float(strike)).mean())
 
         ev_yes = ev_buy_binary(p, ob_stats.ybuy, fee_cents)
         ev_no = ev_buy_binary(1.0 - p, ob_stats.nbuy, fee_cents)

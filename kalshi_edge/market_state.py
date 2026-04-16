@@ -3,11 +3,11 @@ market_state.py — build MarketState from external BTC venues.
 
 Gathers:
 - Spot price (Deribit index)
-- Deribit DVOL index (forward-looking implied vol)
 - Implied volatility estimate (Deribit options, near ATM)
 - Realized short-term volatility (Coinbase 1-min candles)
+- Weighted implied/realized volatility proxy
 - GARCH(1,1) forecast volatility
-- Regression-adjusted sigma (encompassing DVOL + RV blend)
+- Regression-adjusted sigma
 - Confidence label and expected 1-sigma move over time remaining
 
 This module is intentionally independent from Kalshi — it only talks to
@@ -21,17 +21,24 @@ import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import numpy as np
 import pandas as pd
 
 from kalshi_edge.constants import DERIBIT, COINBASE, MINUTES_PER_YEAR
 from kalshi_edge.http_client import HttpClient
+from kalshi_edge.live_iv_cache import append_live_iv_snapshot, snapshot_now
 from kalshi_edge.math_models import expected_one_sigma_move_pct
 from kalshi_edge.util.time import utc_now  # canonical source
 
 _log = logging.getLogger(__name__)
+
+
+class SupportsVolPrediction(Protocol):
+    is_fitted: bool
+
+    def predict(self, iv_proxy_current: float, rv_trailing: float) -> float: ...
 
 
 @dataclass
@@ -41,12 +48,13 @@ class MarketState:
     spot: float
     sigma_implied: float
     sigma_realized: float
+    sigma_weighted: float
     sigma_blend: float
+    vol_source: str
     confidence: str
     one_sigma_move_pct: float
     note: str
     sigma_garch: float = 0.0
-    dvol_current: float = 0.0
     sigma_adjusted: float = 0.0
 
 
@@ -54,34 +62,6 @@ def deribit_index_price(http: HttpClient, index_name: str = "btc_usd") -> float:
     data = http.get_json(f"{DERIBIT}/public/get_index_price", params={"index_name": index_name})
     px = float(data["result"]["index_price"])
     return px
-
-
-def fetch_deribit_dvol(http: HttpClient, currency: str = "BTC") -> float:
-    """
-    Fetch the current Deribit DVOL index as an annualized decimal.
-
-    DVOL is reported as a percentage (e.g. 60 ⇒ 60% annual vol);
-    we normalize to decimal (0.60).
-    """
-    now_ms = int(utc_now().timestamp() * 1000)
-    start_ms = now_ms - 7_200_000  # 2 h lookback to guarantee ≥1 point
-
-    data = http.get_json(
-        f"{DERIBIT}/public/get_volatility_index_data",
-        params={
-            "currency": currency,
-            "start_timestamp": start_ms,
-            "end_timestamp": now_ms,
-            "resolution": 60,
-        },
-    )
-    rows = data.get("result", {}).get("data", [])
-    if not rows:
-        raise RuntimeError("No DVOL data returned from Deribit")
-
-    latest = rows[-1]
-    dvol_raw = float(latest[4])  # close value
-    return dvol_raw / 100.0
 
 
 def normalize_mark_iv(x: Any) -> Optional[float]:
@@ -243,6 +223,15 @@ def blend_vol(implied: float, realized: float) -> Tuple[float, str]:
     return 0.7 * implied + 0.3 * realized, f"realized/implied={ratio:.2f} -> 70/30"
 
 
+def fixed_live_blend(implied: float, realized: float) -> Tuple[float, str]:
+    """
+    Fixed live fallback requested for dry/live trading when regression is unavailable.
+    """
+    if implied <= 0:
+        return realized, "implied<=0 so use realized"
+    return (0.75 * implied) + (0.25 * realized), "fixed_live_blend=75/25"
+
+
 def confidence_label(implied: float, realized: float) -> str:
     """Crude confidence based on disagreement between implied and realized."""
     if implied <= 0:
@@ -259,21 +248,23 @@ def build_market_state(
     http: HttpClient,
     minutes_left: float,
     iv_band_pct: float = 3.0,
-    vol_model: object | None = None,
+    vol_model: SupportsVolPrediction | None = None,
+    live_iv_cache_path: str | None = None,
 ) -> MarketState:
     """
     Compute MarketState given minutes_left until Kalshi close.
 
     Volatility priority:
-      1. Encompassing Regression (adjusted_sigma from DVOL + RV)  ← new
+      1. Encompassing Regression (weighted IV/RV proxy + RV)
       2. GARCH(1,1) forecast from Coinbase 1-min returns
-      3. Heuristic IV/RV blend                                    (fallback)
+      3. Weighted IV/RV blend                                    (fallback)
 
     Parameters
     ----------
     vol_model : VolatilityRegression | None
         A fitted :class:`~kalshi_edge.vol_regression.VolatilityRegression`.
-        When provided (and fitted), its prediction becomes the primary sigma.
+        When provided (and fitted), its prediction on the weighted implied/RV
+        proxy becomes the primary sigma.
     """
     from kalshi_edge.garch import forecast_garch_volatility
 
@@ -281,17 +272,7 @@ def build_market_state(
 
     spot = deribit_index_price(http, "btc_usd")
 
-    # --- Deribit DVOL index ---
-    dvol = 0.0
-    dvol_note = ""
-    try:
-        dvol = fetch_deribit_dvol(http)
-        dvol_note = f"dvol={dvol*100:.1f}%"
-    except Exception as e:
-        _log.warning("Deribit DVOL fetch failed (%s)", e)
-        dvol_note = f"dvol_failed: {e}"
-
-    # --- Deribit IV (kept for diagnostics) ---
+    # --- Deribit IV ---
     try:
         sigma_imp, iv_note = deribit_atm_implied_vol(http, spot, band_pct=iv_band_pct)
     except Exception as e:
@@ -303,6 +284,20 @@ def build_market_state(
     closes = fetch_coinbase_1min_closes(http, "BTC-USD")
     returns = log_returns_from_closes(closes)
     sigma_real = realized_vol_from_returns(returns, window=60)
+    sigma_weighted, weighted_note = fixed_live_blend(sigma_imp, sigma_real)
+    if live_iv_cache_path and sigma_imp > 0:
+        try:
+            append_live_iv_snapshot(
+                live_iv_cache_path,
+                snapshot_now(
+                    spot=spot,
+                    sigma_implied=sigma_imp,
+                    iv_band_pct=iv_band_pct,
+                    note=iv_note,
+                ),
+            )
+        except Exception as e:
+            _log.warning("Live IV cache write failed (%s)", e)
 
     # --- GARCH(1,1) forecast ---
     sigma_garch = 0.0
@@ -318,7 +313,7 @@ def build_market_state(
     regression_note = ""
     if vol_model is not None and getattr(vol_model, "is_fitted", False):
         try:
-            sigma_adj = vol_model.predict(dvol, sigma_real)
+            sigma_adj = vol_model.predict(sigma_weighted, sigma_real)
             regression_note = f"regression σ_adj={sigma_adj*100:.1f}%"
         except Exception as e:
             _log.warning("Regression prediction failed (%s); falling back", e)
@@ -328,17 +323,19 @@ def build_market_state(
     if sigma_adj > 0:
         sigma_primary = sigma_adj
         blend_note = f"primary=regression; {regression_note}"
+        vol_source = "regression"
     elif sigma_garch > 0:
         sigma_primary = sigma_garch
         blend_note = f"primary=garch; {garch_note}"
+        vol_source = "garch"
     else:
-        sigma_bl, heuristic_note = blend_vol(sigma_imp, sigma_real)
-        sigma_primary = sigma_bl
-        blend_note = f"primary=blend_fallback; {heuristic_note}"
+        sigma_primary = sigma_weighted
+        blend_note = f"primary=fixed_live_blend; {weighted_note}"
+        vol_source = "fixed_live_blend"
 
     conf = confidence_label(sigma_imp, sigma_real)
     one_sigma = expected_one_sigma_move_pct(sigma_primary, minutes_left)
-    full_note = f"{dvol_note}; {iv_note}; {blend_note}"
+    full_note = f"{iv_note}; weighted_iv_rv={sigma_weighted*100:.1f}% ({weighted_note}); {blend_note}"
 
     return MarketState(
         ts_utc=ts,
@@ -346,11 +343,12 @@ def build_market_state(
         spot=spot,
         sigma_implied=sigma_imp,
         sigma_realized=sigma_real,
+        sigma_weighted=sigma_weighted,
         sigma_blend=sigma_primary,
+        vol_source=vol_source,
         confidence=conf,
         one_sigma_move_pct=one_sigma,
         note=full_note,
         sigma_garch=sigma_garch,
-        dvol_current=dvol,
         sigma_adjusted=sigma_adj,
     )

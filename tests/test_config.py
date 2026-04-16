@@ -102,7 +102,19 @@ class TestConfigFromFile(unittest.TestCase):
             os.unlink(path)
 
     def test_load_backtest_from_section(self) -> None:
-        data = {"backtest": {"DAYS": "7", "MAX_EVENTS": "12", "DEBUG_HTTP": "true"}}
+        data = {
+            "strategy": {},
+            "backtest": {
+                "DAYS": "7",
+                "MAX_EVENTS": "12",
+                "DEBUG_HTTP": "true",
+                "STEP_SECONDS": "30",
+                "REALIZED_VOL_WINDOW_MINUTES": "1",
+                "POSITION_SIZING_MODE": "kelly",
+                "STARTING_BANKROLL_DOLLARS": "100",
+                "KELLY_FRACTION": "0.5",
+            },
+        }
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
             json.dump(data, f)
             path = f.name
@@ -113,6 +125,11 @@ class TestConfigFromFile(unittest.TestCase):
             self.assertEqual(bt.DAYS, 7)
             self.assertEqual(bt.MAX_EVENTS, 12)
             self.assertTrue(bt.DEBUG_HTTP)
+            self.assertEqual(bt.STEP_SECONDS, 30)
+            self.assertEqual(bt.REALIZED_VOL_WINDOW_MINUTES, 1)
+            self.assertEqual(bt.POSITION_SIZING_MODE, "kelly")
+            self.assertEqual(bt.STARTING_BANKROLL_DOLLARS, 100.0)
+            self.assertEqual(bt.KELLY_FRACTION, 0.5)
         finally:
             if old is None:
                 os.environ.pop(ENV_VAR, None)
